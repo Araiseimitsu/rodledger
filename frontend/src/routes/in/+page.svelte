@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchDashboard, fetchLots, createTransaction } from '$lib/api';
+  import { fetchDashboard, fetchLots, createLot, createTransaction } from '$lib/api';
   import { goto } from '$app/navigation';
 
   let dashboard = $state(null);
@@ -10,13 +10,20 @@
   let submitting = $state(false);
 
   // フォーム状態
+  let lotMode = $state('existing');
   let entryMode = $state('quantity');
   let quantityStep = $state(10);
   let selectedLotId = $state('');
+  let newLotCode = $state('');
+  let newLotUnitPrice = $state('');
   let quantity = $state(0);
   let weight = $state(0);
   let memo = $state('');
   let idempotencyKey = $state('');
+
+  const selectedExistingLot = $derived(lots.find((lot) => lot.id === Number(selectedLotId)) ?? null);
+  const parsedNewLotUnitPrice = $derived(Number(newLotUnitPrice || 0));
+
 
   function normalizeQuantity(value) {
     const parsed = Number(value);
@@ -30,9 +37,20 @@
     return Number(Math.max(0, parsed).toFixed(3));
   }
 
+  function normalizeUnitPrice(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) return '';
+    return String(Number(Math.max(0, parsed).toFixed(1)));
+  }
+
   function syncWeightFromQuantity(nextQuantity) {
     if (!dashboard?.material) return;
     weight = normalizeWeight(nextQuantity * dashboard.material.weight_per_unit);
+  }
+
+  function calculateQuantityFromWeight(nextWeight) {
+    if (!dashboard?.material?.weight_per_unit) return 0;
+    return normalizeQuantity(Math.round(normalizeWeight(nextWeight) / dashboard.material.weight_per_unit));
   }
 
   function setEntryMode(mode) {
@@ -48,6 +66,31 @@
     quantity = 0;
   }
 
+  function setLotMode(mode) {
+    if (lotMode === mode) return;
+    lotMode = mode;
+
+    if (mode === 'new' && !newLotUnitPrice && lots[0]?.unit_price) {
+      newLotUnitPrice = String(lots[0].unit_price);
+    }
+  }
+
+  function syncLotDefaults() {
+    if (lots.length > 0) {
+      selectedLotId = String(lots[0].id);
+      if (!newLotUnitPrice) {
+        newLotUnitPrice = String(lots[0].unit_price);
+      }
+      if (lotMode !== 'new') {
+        lotMode = 'existing';
+      }
+      return;
+    }
+
+    selectedLotId = '';
+    lotMode = 'new';
+  }
+
   async function loadData() {
     loading = true;
     error = '';
@@ -55,9 +98,7 @@
     try {
       dashboard = await fetchDashboard();
       lots = await fetchLots(dashboard.material.id);
-      if (lots.length > 0) {
-        selectedLotId = lots[0].id;
-      }
+      syncLotDefaults();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';
       console.error(e);
@@ -95,6 +136,10 @@
     weight = normalizeWeight(event.currentTarget.value);
   }
 
+  function handleUnitPriceInput(event) {
+    newLotUnitPrice = normalizeUnitPrice(event.currentTarget.value);
+  }
+
   function getSubmissionValues() {
     if (entryMode === 'quantity') {
       const normalizedQuantity = normalizeQuantity(quantity);
@@ -105,13 +150,18 @@
     }
 
     return {
-      quantity: 0,
+      quantity: calculateQuantityFromWeight(weight),
       weight: normalizeWeight(weight),
     };
   }
 
   function canSubmit() {
     const submission = getSubmissionValues();
+    if (lotMode === 'existing' && !selectedLotId) return false;
+    if (lotMode === 'new') {
+      if (!newLotCode.trim()) return false;
+      if (parsedNewLotUnitPrice <= 0) return false;
+    }
     return submission.quantity > 0 || submission.weight > 0;
   }
 
@@ -123,21 +173,36 @@
   async function handleSubmit(e) {
     e.preventDefault();
     const submission = getSubmissionValues();
-    if (submitting || !selectedLotId || (submission.quantity <= 0 && submission.weight <= 0)) return;
+    if (submitting || !canSubmit()) return;
 
     submitting = true;
     if (!idempotencyKey) {
       idempotencyKey = crypto.randomUUID();
     }
     try {
-      const selectedLot = lots.find((l) => l.id === Number(selectedLotId));
+      let targetLot;
+
+      if (lotMode === 'new') {
+        targetLot = await createLot({
+          material_id: dashboard.material.id,
+          lot_code: newLotCode.trim(),
+          unit_price: parsedNewLotUnitPrice,
+        });
+      } else {
+        targetLot = selectedExistingLot;
+      }
+
+      if (!targetLot) {
+        throw new Error('ロットの準備に失敗しました');
+      }
+
       await createTransaction({
         material_id: dashboard.material.id,
-        lot_id: Number(selectedLotId),
+        lot_id: targetLot.id,
         type: 'in',
         quantity: submission.quantity,
         weight: submission.weight,
-        unit_price: selectedLot?.unit_price,
+        unit_price: targetLot.unit_price,
         memo: memo || undefined,
         idempotency_key: idempotencyKey,
       });
@@ -191,25 +256,91 @@
       <div class="lg:col-span-8 bg-surface-container-lowest rounded-xl p-8 shadow-sm">
         <form onsubmit={handleSubmit} class="space-y-10">
           <!-- Lot Selection -->
-          <div class="space-y-3">
-            <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-              >ロット選択</label
-            >
-            <div class="relative">
-              <select
-                id="lot-select"
-                bind:value={selectedLotId}
-                class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
-              >
-                {#each lots as lot}
-                  <option value={lot.id}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
-                {/each}
-              </select>
-              <span
-                class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                >expand_more</span
-              >
+          <div class="space-y-6">
+            <div class="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-3 md:flex-row md:items-center md:justify-between">
+              <div>
+                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">ロット指定</p>
+                <p class="mt-1 text-sm text-on-surface-variant">既存ロットへ追加するか、新規ロットを作成して入庫します。</p>
+              </div>
+              <div class="inline-flex rounded-full bg-surface-container p-1">
+                <button
+                  type="button"
+                  onclick={() => setLotMode('existing')}
+                  disabled={lots.length === 0}
+                  class="rounded-full px-5 py-2 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed {lotMode === 'existing'
+                    ? 'bg-primary text-on-primary'
+                    : 'text-on-surface-variant hover:text-on-surface'}"
+                >
+                  既存ロット
+                </button>
+                <button
+                  type="button"
+                  onclick={() => setLotMode('new')}
+                  class="rounded-full px-5 py-2 text-sm font-semibold transition-colors {lotMode === 'new'
+                    ? 'bg-primary text-on-primary'
+                    : 'text-on-surface-variant hover:text-on-surface'}"
+                >
+                  新規ロット
+                </button>
+              </div>
             </div>
+
+            {#if lotMode === 'existing'}
+              <div class="space-y-3">
+                <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                  >ロット選択</label
+                >
+                <div class="relative">
+                  <select
+                    id="lot-select"
+                    bind:value={selectedLotId}
+                    disabled={lots.length === 0}
+                    class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {#if lots.length === 0}
+                      <option value="">既存ロットがありません</option>
+                    {:else}
+                      {#each lots as lot}
+                        <option value={lot.id}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
+                      {/each}
+                    {/if}
+                  </select>
+                  <span
+                    class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
+                    >expand_more</span
+                  >
+                </div>
+              </div>
+            {:else}
+              <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <div class="space-y-3">
+                  <label for="new-lot-code" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                    >新規ロットコード</label
+                  >
+                  <input
+                    id="new-lot-code"
+                    type="text"
+                    bind:value={newLotCode}
+                    placeholder="例: LOT-SUM22-002"
+                    class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40"
+                  />
+                </div>
+                <div class="space-y-3">
+                  <label for="new-lot-unit-price" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                    >新規ロット単価（円/kg）</label
+                  >
+                  <input
+                    id="new-lot-unit-price"
+                    type="number"
+                    value={newLotUnitPrice}
+                    min="0"
+                    step="0.1"
+                    oninput={handleUnitPriceInput}
+                    class="no-spinner w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40"
+                  />
+                </div>
+              </div>
+            {/if}
           </div>
 
           <!-- Quantity / Weight -->
@@ -269,7 +400,7 @@
                       </button>
                     </div>
                   {:else}
-                    <span class="text-xs text-outline-variant">重量入力時は 0 本で記録</span>
+                    <span class="text-xs text-outline-variant">重量から換算した本数を登録します</span>
                   {/if}
                 </div>
                 {#if entryMode === 'quantity'}
@@ -300,7 +431,7 @@
                   </div>
                 {:else}
                   <div class="flex items-center justify-center rounded-xl bg-surface-container-low py-6 px-6 text-2xl md:text-3xl font-bold text-on-surface-variant">
-                    0
+                    {calculateQuantityFromWeight(weight).toLocaleString('ja-JP')}
                   </div>
                 {/if}
               </div>
@@ -410,6 +541,23 @@
               <span class="font-medium text-on-surface">{dashboard.material.weight_per_unit} kg/本</span>
             </div>
           </div>
+        </div>
+
+        <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-6">
+          <h3 class="font-label text-xs font-bold tracking-widest text-on-surface-variant uppercase">入庫先ロット</h3>
+          {#if lotMode === 'new'}
+            <div class="mt-4 space-y-2">
+              <p class="font-medium text-on-surface">{newLotCode.trim() || '未入力'}</p>
+              <p class="text-sm text-on-surface-variant">単価 ¥{parsedNewLotUnitPrice.toFixed(1)}/kg の新規ロットを作成して入庫します。</p>
+            </div>
+          {:else if selectedExistingLot}
+            <div class="mt-4 space-y-2">
+              <p class="font-medium text-on-surface">{selectedExistingLot.lot_code}</p>
+              <p class="text-sm text-on-surface-variant">既存ロットへ追加入庫します。単価は ¥{selectedExistingLot.unit_price}/kg です。</p>
+            </div>
+          {:else}
+            <p class="mt-4 text-sm text-on-surface-variant">既存ロットがないため、新規ロットを作成して入庫してください。</p>
+          {/if}
         </div>
       </div>
     </div>

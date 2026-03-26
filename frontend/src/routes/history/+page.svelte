@@ -232,6 +232,7 @@
                   <span class="font-body text-xs text-on-surface-variant">{formatTime(tx.created_at)}</span>
                 </div>
                 <p class="font-body text-on-surface">{tx.memo || 'メモなし'}</p>
+                <p class="mt-1 text-xs text-on-surface-variant">{tx.lot_code || 'ロット不明'}</p>
               </div>
             </div>
             <div class="mt-4 md:mt-0 flex items-center gap-12 text-right">

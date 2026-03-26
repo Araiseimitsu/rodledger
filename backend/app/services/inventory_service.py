@@ -10,7 +10,9 @@ from app.models.models import (
     Material,
     MaterialUpdate,
     Lot,
+    LotCreate,
     LotUpdate,
+    LotInventorySummary,
     Transaction,
     TransactionCreate,
     TransactionType,
@@ -25,6 +27,73 @@ class InsufficientInventoryError(Exception):
 
 class InventoryService:
     """在庫計算ロジック"""
+
+    @staticmethod
+    def _normalize_zero(value: float, digits: int = 3) -> float:
+        """丸め後の -0.0 を 0.0 に正規化する"""
+        rounded = round(value, digits)
+        return 0.0 if rounded == 0 else rounded
+
+    @staticmethod
+    async def _get_lot_inventory_summaries(
+        db,
+        material_id: int,
+    ) -> list[LotInventorySummary]:
+        """材料に紐づくロット別在庫を FIFO 順で集計する"""
+        cursor = await db.execute(
+            """
+            SELECT
+                lots.id AS lot_id,
+                lots.lot_code AS lot_code,
+                lots.unit_price AS unit_price,
+                lots.created_at AS created_at,
+                COALESCE(SUM(
+                    CASE
+                        WHEN transactions.type IN ('in', 'return') THEN transactions.quantity
+                        WHEN transactions.type = 'out' THEN -transactions.quantity
+                        WHEN transactions.type = 'adjust' THEN transactions.quantity
+                        ELSE 0
+                    END
+                ), 0) AS current_quantity,
+                COALESCE(SUM(
+                    CASE
+                        WHEN transactions.type IN ('in', 'return') THEN transactions.weight
+                        WHEN transactions.type = 'out' THEN -transactions.weight
+                        WHEN transactions.type = 'adjust' THEN transactions.weight
+                        ELSE 0
+                    END
+                ), 0) AS current_weight
+            FROM lots
+            LEFT JOIN transactions ON transactions.lot_id = lots.id
+            WHERE lots.material_id = ?
+            GROUP BY lots.id, lots.lot_code, lots.unit_price, lots.created_at
+            ORDER BY datetime(lots.created_at) ASC, lots.id ASC
+            """,
+            (material_id,),
+        )
+        rows = await cursor.fetchall()
+        return [
+            LotInventorySummary(
+                lot_id=row["lot_id"],
+                lot_code=row["lot_code"],
+                unit_price=row["unit_price"],
+                created_at=row["created_at"],
+                current_quantity=row["current_quantity"] or 0,
+                current_weight=InventoryService._normalize_zero(row["current_weight"] or 0.0, 3),
+                current_value=InventoryService._normalize_zero((row["current_weight"] or 0.0) * row["unit_price"], 1),
+            )
+            for row in rows
+        ]
+
+    @staticmethod
+    def _get_oldest_available_lot_id(
+        lot_summaries: list[LotInventorySummary],
+    ) -> Optional[int]:
+        """FIFO で次に使用すべきロット ID を返す"""
+        for lot_summary in lot_summaries:
+            if lot_summary.current_quantity > 0 or lot_summary.current_weight > 0:
+                return lot_summary.lot_id
+        return None
 
     @staticmethod
     def calculate_weight_per_unit(diameter: float, length: float, density: float) -> float:
@@ -128,6 +197,25 @@ class InventoryService:
             await db.close()
 
     @staticmethod
+    async def create_lot(data: LotCreate) -> Lot:
+        """ロット作成"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                """
+                INSERT INTO lots (material_id, lot_code, unit_price)
+                VALUES (?, ?, ?)
+                """,
+                (data.material_id, data.lot_code, data.unit_price),
+            )
+            await db.commit()
+            lot_id = cursor.lastrowid
+        finally:
+            await db.close()
+
+        return await InventoryService.get_lot(lot_id)
+
+    @staticmethod
     async def update_lot(lot_id: int, data: LotUpdate) -> Optional[Lot]:
         """ロット単価更新"""
         db = await get_db()
@@ -156,31 +244,19 @@ class InventoryService:
             material = await InventoryService.get_material(material_id)
             if not material:
                 raise ValueError(f"Material not found: {material_id}")
-
-            cursor = await db.execute(
-                """
-                SELECT
-                    SUM(CASE WHEN type IN ('in', 'return') THEN quantity ELSE -quantity END) as total_qty,
-                    SUM(CASE WHEN type IN ('in', 'return') THEN weight ELSE -weight END) as total_weight,
-                    SUM(CASE
-                        WHEN type = 'in' THEN weight * unit_price
-                        WHEN type = 'return' THEN weight * unit_price
-                        WHEN type = 'out' THEN -weight * unit_price
-                        ELSE 0
-                    END) as total_value
-                FROM transactions
-                WHERE material_id = ?
-                """,
-                (material_id,),
-            )
-            row = await cursor.fetchone()
+            lot_summaries = await InventoryService._get_lot_inventory_summaries(db, material_id)
+            total_quantity = sum(lot.current_quantity for lot in lot_summaries)
+            total_weight = sum(lot.current_weight for lot in lot_summaries)
+            total_value = sum(lot.current_value for lot in lot_summaries)
 
             return InventorySummary(
                 material_id=material_id,
                 material_name=material.name,
-                total_quantity=row["total_qty"] or 0,
-                total_weight=round(row["total_weight"] or 0.0, 3),
-                total_value=round(row["total_value"] or 0.0, 1),
+                total_quantity=total_quantity,
+                total_weight=InventoryService._normalize_zero(total_weight, 3),
+                total_value=InventoryService._normalize_zero(total_value, 1),
+                lot_summaries=lot_summaries,
+                oldest_available_lot_id=InventoryService._get_oldest_available_lot_id(lot_summaries),
             )
         finally:
             await db.close()
@@ -201,6 +277,20 @@ class InventoryService:
                 inventory = await InventoryService.calculate_inventory(data.material_id)
                 if data.quantity > inventory.total_quantity or data.weight > inventory.total_weight:
                     raise InsufficientInventoryError("在庫不足です")
+
+                selected_lot = next(
+                    (lot for lot in inventory.lot_summaries if lot.lot_id == data.lot_id),
+                    None,
+                )
+                if not selected_lot:
+                    raise InsufficientInventoryError("出庫対象のロットが見つかりません")
+
+                if data.quantity > selected_lot.current_quantity or data.weight > selected_lot.current_weight:
+                    raise InsufficientInventoryError("選択したロットの在庫が不足しています")
+
+                oldest_available_lot_id = inventory.oldest_available_lot_id
+                if oldest_available_lot_id and oldest_available_lot_id != data.lot_id:
+                    raise InsufficientInventoryError("古いロットから順に出庫してください")
 
             try:
                 cursor = await db.execute(
@@ -241,7 +331,13 @@ class InventoryService:
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT * FROM transactions WHERE id = ?", (tx_id,)
+                """
+                SELECT transactions.*, lots.lot_code
+                FROM transactions
+                LEFT JOIN lots ON lots.id = transactions.lot_id
+                WHERE transactions.id = ?
+                """,
+                (tx_id,),
             )
             row = await cursor.fetchone()
             if row:
@@ -258,7 +354,12 @@ class InventoryService:
         db = await get_db()
         try:
             cursor = await db.execute(
-                "SELECT * FROM transactions WHERE idempotency_key = ?",
+                """
+                SELECT transactions.*, lots.lot_code
+                FROM transactions
+                LEFT JOIN lots ON lots.id = transactions.lot_id
+                WHERE transactions.idempotency_key = ?
+                """,
                 (idempotency_key,),
             )
             row = await cursor.fetchone()
@@ -278,17 +379,22 @@ class InventoryService:
         """トランザクション一覧"""
         db = await get_db()
         try:
-            query = "SELECT * FROM transactions WHERE 1=1"
+            query = """
+                SELECT transactions.*, lots.lot_code
+                FROM transactions
+                LEFT JOIN lots ON lots.id = transactions.lot_id
+                WHERE 1=1
+            """
             params = []
 
             if material_id:
-                query += " AND material_id = ?"
+                query += " AND transactions.material_id = ?"
                 params.append(material_id)
             if tx_type:
-                query += " AND type = ?"
+                query += " AND transactions.type = ?"
                 params.append(tx_type.value)
 
-            query += " ORDER BY created_at DESC LIMIT ? OFFSET ?"
+            query += " ORDER BY transactions.created_at DESC LIMIT ? OFFSET ?"
             params.extend([limit, offset])
 
             cursor = await db.execute(query, params)
@@ -360,5 +466,7 @@ class InventoryService:
             total_quantity=inventory.total_quantity,
             total_weight=inventory.total_weight,
             total_value=inventory.total_value,
+            lot_summaries=inventory.lot_summaries,
+            oldest_available_lot_id=inventory.oldest_available_lot_id,
             recent_transactions=recent,
         )

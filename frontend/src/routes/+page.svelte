@@ -145,6 +145,10 @@
   function formatSpecNumber(num, maximumFractionDigits = 3) {
     return num?.toLocaleString('ja-JP', { maximumFractionDigits }) ?? '0';
   }
+
+  function isOldestAvailableLot(lotSummary) {
+    return dashboard?.oldest_available_lot_id === lotSummary?.lot_id;
+  }
 </script>
 
 {#if loading}
@@ -301,21 +305,74 @@
         </div>
       </div>
 
-      <!-- Chart Placeholder -->
+      <!-- FIFO Lot Guide -->
       <div class="md:col-span-4 bg-white/60 backdrop-blur-xl border border-outline-variant/15 rounded-xl overflow-hidden">
-        <div class="h-32 bg-primary/5 flex items-end px-6">
-          <div class="flex items-end gap-1 w-full justify-between pb-4">
-            {#each [4, 8, 12, 6, 16, 14, 20] as h}
-              <div class="w-2 bg-primary rounded-t-sm" style="height: {h * 4}px; opacity: {0.2 + h * 0.03}"></div>
-            {/each}
+        <div class="bg-primary/5 px-6 py-6">
+          <div class="flex min-h-[12rem] flex-col rounded-2xl border border-primary/15 bg-surface/60 p-5">
+            <div>
+              <h4 class="font-label font-bold text-xs uppercase tracking-widest text-primary">FIFO 優先ロット</h4>
+              <p class="mt-2 text-sm text-on-surface-variant">出庫は在庫が残っている最古ロットから順に処理します。</p>
+            </div>
+            <p class="mt-5 break-all font-headline text-xl leading-tight text-on-surface md:text-2xl">
+              {#if dashboard.lot_summaries.length > 0 && dashboard.oldest_available_lot_id}
+                {dashboard.lot_summaries.find((lot) => lot.lot_id === dashboard.oldest_available_lot_id)?.lot_code}
+              {:else}
+                在庫なし
+              {/if}
+            </p>
           </div>
         </div>
         <div class="p-6">
-          <h4 class="font-label font-bold text-xs uppercase tracking-widest mb-2">在庫推移</h4>
-          <p class="text-sm text-on-surface-variant">在庫レベルは安定しています</p>
+          <h4 class="font-label font-bold text-xs uppercase tracking-widest mb-2">ロット切替対応</h4>
+          <p class="text-sm text-on-surface-variant">古いロットの戻しがあっても、残在庫があれば再び優先対象として扱います。</p>
         </div>
       </div>
     </div>
+
+    <section class="mt-12 rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-8 md:p-10">
+      <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h3 class="font-headline text-2xl text-on-surface">ロット別在庫</h3>
+          <p class="mt-2 text-sm text-on-surface-variant">総数を維持したまま、各ロットの残本数と残重量を確認できます。</p>
+        </div>
+        <p class="text-sm text-on-surface-variant">
+          合計 {formatNumber(dashboard.total_quantity)} 本 / {formatSpecNumber(dashboard.total_weight, 3)} kg
+        </p>
+      </div>
+
+      <div class="space-y-3">
+        {#each dashboard.lot_summaries as lotSummary}
+          <div class="flex flex-col gap-4 rounded-2xl border px-5 py-4 md:flex-row md:items-center md:justify-between {isOldestAvailableLot(lotSummary)
+            ? 'border-primary/35 bg-primary/5'
+            : 'border-outline-variant/15 bg-surface'}">
+            <div>
+              <div class="flex flex-wrap items-center gap-3">
+                <p class="font-body text-lg font-semibold text-on-surface">{lotSummary.lot_code}</p>
+                {#if isOldestAvailableLot(lotSummary)}
+                  <span class="rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-on-primary">FIFO 優先</span>
+                {/if}
+              </div>
+              <p class="mt-1 text-sm text-on-surface-variant">登録日 {formatDate(lotSummary.created_at)} / 単価 ¥{formatSpecNumber(lotSummary.unit_price, 1)}kg</p>
+            </div>
+
+            <div class="grid grid-cols-3 gap-4 text-right md:min-w-[24rem]">
+              <div>
+                <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">残本数</p>
+                <p class="mt-1 font-headline text-2xl text-on-surface">{formatNumber(lotSummary.current_quantity)}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">残重量</p>
+                <p class="mt-1 font-headline text-2xl text-on-surface">{formatSpecNumber(lotSummary.current_weight, 3)}</p>
+              </div>
+              <div>
+                <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">在庫金額</p>
+                <p class="mt-1 font-headline text-2xl text-on-surface">¥{formatNumber(Math.round(lotSummary.current_value))}</p>
+              </div>
+            </div>
+          </div>
+        {/each}
+      </div>
+    </section>
 
     <!-- Recent Transactions -->
     <section class="mt-20">
@@ -333,7 +390,7 @@
                 <p class="font-body font-bold text-on-surface">
                   {tx.type === 'in' ? '入庫' : tx.type === 'out' ? '出庫' : tx.type === 'return' ? '戻し' : '修正'}
                 </p>
-                <p class="text-xs text-on-surface-variant">{tx.memo || 'メモなし'}</p>
+                <p class="text-xs text-on-surface-variant">{tx.lot_code || 'ロット不明'} / {tx.memo || 'メモなし'}</p>
               </div>
             </div>
             <div class="text-right">

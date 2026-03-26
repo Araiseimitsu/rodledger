@@ -21,6 +21,19 @@
   let memo = $state('');
   let idempotencyKey = $state('');
 
+  const lotSummaries = $derived(dashboard?.lot_summaries ?? []);
+  const availableLotSummaries = $derived(
+    lotSummaries.filter((lot) => lot.current_quantity > 0 || lot.current_weight > 0)
+  );
+  const selectableLots = $derived(
+    mode === 'out'
+      ? lots.filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id))
+      : lots
+  );
+  const selectedLotSummary = $derived(
+    lotSummaries.find((lot) => lot.lot_id === Number(selectedLotId)) ?? null
+  );
+
   function normalizeQuantity(value) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return 0;
@@ -38,6 +51,11 @@
     weight = normalizeWeight(nextQuantity * dashboard.material.weight_per_unit);
   }
 
+  function calculateQuantityFromWeight(nextWeight) {
+    if (!dashboard?.material?.weight_per_unit) return 0;
+    return normalizeQuantity(Math.round(normalizeWeight(nextWeight) / dashboard.material.weight_per_unit));
+  }
+
   function setEntryMode(nextMode) {
     if (entryMode === nextMode) return;
     entryMode = nextMode;
@@ -51,6 +69,17 @@
     quantity = 0;
   }
 
+  function syncSelectedLotId() {
+    if (mode === 'out') {
+      const preferredLotId = dashboard?.oldest_available_lot_id;
+      const preferredLot = selectableLots.find((lot) => lot.id === preferredLotId) ?? selectableLots[0];
+      selectedLotId = preferredLot ? String(preferredLot.id) : '';
+      return;
+    }
+
+    selectedLotId = lots.length > 0 ? String(lots[0].id) : '';
+  }
+
   async function loadData() {
     loading = true;
     error = '';
@@ -58,9 +87,7 @@
     try {
       dashboard = await fetchDashboard();
       lots = await fetchLots(dashboard.material.id);
-      if (lots.length > 0) {
-        selectedLotId = lots[0].id;
-      }
+      syncSelectedLotId();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';
       console.error(e);
@@ -98,6 +125,15 @@
     weight = normalizeWeight(event.currentTarget.value);
   }
 
+  function getLotOptionLabel(lot) {
+    const summary = lotSummaries.find((item) => item.lot_id === lot.id);
+    if (mode !== 'out' || !summary) {
+      return `${lot.lot_code} (¥${lot.unit_price}/kg)`;
+    }
+
+    return `${lot.lot_code} (${summary.current_quantity}本 / ${summary.current_weight.toFixed(3)}kg)`;
+  }
+
   function getSubmissionValues() {
     if (entryMode === 'quantity') {
       const normalizedQuantity = normalizeQuantity(quantity);
@@ -108,15 +144,25 @@
     }
 
     return {
-      quantity: 0,
+      quantity: calculateQuantityFromWeight(weight),
       weight: normalizeWeight(weight),
     };
   }
 
   function canSubmit() {
     const submission = getSubmissionValues();
-    return submission.quantity > 0 || submission.weight > 0;
+    return selectableLots.length > 0 && (submission.quantity > 0 || submission.weight > 0);
   }
+
+  $effect(() => {
+    mode;
+    selectableLots;
+    lots;
+
+    if (!selectedLotId || !selectableLots.some((lot) => String(lot.id) === String(selectedLotId))) {
+      syncSelectedLotId();
+    }
+  });
 
   function handleRetry() {
     loadData();
@@ -223,6 +269,13 @@
         <form onsubmit={handleSubmit} class="space-y-10">
           <!-- Lot Selection -->
           <div class="space-y-3">
+            {#if mode === 'out' && dashboard?.oldest_available_lot_id}
+              <div class="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
+                FIFO に従い、現在は
+                <span class="font-semibold">{lotSummaries.find((lot) => lot.lot_id === dashboard.oldest_available_lot_id)?.lot_code}</span>
+                から出庫します。
+              </div>
+            {/if}
             <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
               >ロット選択</label
             >
@@ -230,11 +283,16 @@
               <select
                 id="lot-select"
                 bind:value={selectedLotId}
+                disabled={selectableLots.length === 0}
                 class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
               >
-                {#each lots as lot}
-                  <option value={lot.id}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
-                {/each}
+                {#if selectableLots.length === 0}
+                  <option value="">選択可能なロットがありません</option>
+                {:else}
+                  {#each selectableLots as lot}
+                    <option value={lot.id}>{getLotOptionLabel(lot)}</option>
+                  {/each}
+                {/if}
               </select>
               <span
                 class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
@@ -310,7 +368,7 @@
                       </button>
                     </div>
                   {:else}
-                    <span class="text-xs text-outline-variant">重量入力時は 0 本で記録</span>
+                    <span class="text-xs text-outline-variant">重量から換算した本数を登録します</span>
                   {/if}
                 </div>
                 {#if entryMode === 'quantity'}
@@ -341,7 +399,7 @@
                   </div>
                 {:else}
                   <div class="flex items-center justify-center rounded-xl bg-surface-container-low py-6 px-6 text-2xl md:text-3xl font-bold text-on-surface-variant">
-                    0
+                    {calculateQuantityFromWeight(weight).toLocaleString('ja-JP')}
                   </div>
                 {/if}
               </div>
@@ -440,6 +498,54 @@
           </div>
           <div class="pt-4 border-t border-outline-variant/15">
             <p class="text-xs text-on-surface-variant">重量: {dashboard.total_weight.toFixed(1)} kg</p>
+          </div>
+        </div>
+
+        <div class="bg-surface-container-lowest rounded-xl border border-outline-variant/15 p-6">
+          <h3 class="font-label text-xs font-bold tracking-widest text-on-surface-variant uppercase">選択ロット在庫</h3>
+          {#if selectedLotSummary}
+            <div class="mt-4 space-y-3">
+              <div>
+                <p class="font-semibold text-on-surface">{selectedLotSummary.lot_code}</p>
+                <p class="text-xs text-on-surface-variant">残重量 {selectedLotSummary.current_weight.toFixed(3)} kg</p>
+              </div>
+              <div class="grid grid-cols-2 gap-3">
+                <div class="rounded-xl bg-surface-container p-4">
+                  <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">残本数</p>
+                  <p class="mt-2 font-headline text-3xl text-on-surface">{selectedLotSummary.current_quantity}</p>
+                </div>
+                <div class="rounded-xl bg-surface-container p-4">
+                  <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">単価</p>
+                  <p class="mt-2 font-headline text-3xl text-on-surface">¥{selectedLotSummary.unit_price}</p>
+                </div>
+              </div>
+            </div>
+          {:else}
+            <p class="mt-4 text-sm text-on-surface-variant">{mode === 'out' ? '出庫可能なロット在庫がありません。' : '戻し先ロットを選択してください。'}</p>
+          {/if}
+        </div>
+
+        <div class="bg-surface-container-low rounded-xl p-6 space-y-4">
+          <h3 class="font-label text-xs font-bold tracking-widest text-on-surface-variant uppercase">FIFO ロット順</h3>
+          <div class="space-y-3">
+            {#each lotSummaries as lot}
+              <div class="rounded-xl border px-4 py-3 {dashboard.oldest_available_lot_id === lot.lot_id
+                ? 'border-primary/30 bg-primary/5'
+                : 'border-outline-variant/15 bg-surface-container'}">
+                <div class="flex items-center justify-between gap-4">
+                  <div>
+                    <p class="font-medium text-on-surface">{lot.lot_code}</p>
+                    <p class="text-xs text-on-surface-variant">{lot.current_weight.toFixed(3)} kg</p>
+                  </div>
+                  <div class="text-right">
+                    <p class="font-semibold text-on-surface">{lot.current_quantity} 本</p>
+                    {#if dashboard.oldest_available_lot_id === lot.lot_id}
+                      <p class="text-[10px] uppercase tracking-widest text-primary">現在優先</p>
+                    {/if}
+                  </div>
+                </div>
+              </div>
+            {/each}
           </div>
         </div>
 

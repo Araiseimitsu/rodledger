@@ -96,12 +96,24 @@ class Transaction(TransactionBase):
     id: int
     unit_price: float
     created_at: datetime
+    lot_code: Optional[str] = None
 
     class Config:
         from_attributes = True
 
 
 # ============ Inventory ============
+class LotInventorySummary(BaseModel):
+    """ロット別在庫サマリー"""
+    lot_id: int
+    lot_code: str
+    unit_price: float
+    created_at: datetime
+    current_quantity: int
+    current_weight: float
+    current_value: float
+
+
 class InventorySummary(BaseModel):
     """在庫サマリー"""
     material_id: int
@@ -109,6 +121,8 @@ class InventorySummary(BaseModel):
     total_quantity: int
     total_weight: float
     total_value: float
+    lot_summaries: list[LotInventorySummary] = Field(default_factory=list)
+    oldest_available_lot_id: Optional[int] = None
 
 
 class DashboardStats(BaseModel):
@@ -117,4 +131,6 @@ class DashboardStats(BaseModel):
     total_quantity: int
     total_weight: float
     total_value: float
+    lot_summaries: list[LotInventorySummary] = Field(default_factory=list)
+    oldest_available_lot_id: Optional[int] = None
     recent_transactions: list[Transaction]

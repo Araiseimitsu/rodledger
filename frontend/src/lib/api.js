@@ -54,6 +54,7 @@ async function requestJson(path, options = {}) {
  * @property {string} created_at
  * @property {string} [memo]
  * @property {string} [idempotency_key]
+ * @property {string} [lot_code]
  */
 
 /**
@@ -83,7 +84,25 @@ async function requestJson(path, options = {}) {
  */
 
 /**
+ * @typedef {Object} LotInventorySummary
+ * @property {number} lot_id
+ * @property {string} lot_code
+ * @property {number} unit_price
+ * @property {string} created_at
+ * @property {number} current_quantity
+ * @property {number} current_weight
+ * @property {number} current_value
+ */
+
+/**
  * @typedef {Object} LotUpdateInput
+ * @property {number} unit_price
+ */
+
+/**
+ * @typedef {Object} LotCreateInput
+ * @property {number} material_id
+ * @property {string} lot_code
  * @property {number} unit_price
  */
 
@@ -93,6 +112,8 @@ async function requestJson(path, options = {}) {
  * @property {number} total_quantity
  * @property {number} total_weight
  * @property {number} total_value
+ * @property {LotInventorySummary[]} lot_summaries
+ * @property {number | null} oldest_available_lot_id
  * @property {Transaction[]} recent_transactions
  */
 
@@ -205,6 +226,19 @@ export async function deleteTransaction(id) {
  */
 export async function fetchLots(materialId) {
   return requestJson(`/lots/${materialId}`);
+}
+
+/**
+ * ロット作成
+ * @param {LotCreateInput} data
+ * @returns {Promise<Lot>}
+ */
+export async function createLot(data) {
+  return requestJson('/lots', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(data),
+  });
 }
 
 /**

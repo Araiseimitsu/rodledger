@@ -68,6 +68,7 @@ async def init_db():
         # デモ用初期データの投入
         await _seed_demo_data(db)
         await _migrate_demo_material_defaults(db)
+        await _reconcile_negative_inventory(db)
     finally:
         await db.close()
 
@@ -164,3 +165,72 @@ async def _ensure_transaction_idempotency_key(db: aiosqlite.Connection):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency_key ON transactions(idempotency_key)"
     )
+
+
+async def _reconcile_negative_inventory(db: aiosqlite.Connection):
+    """既存データの負在庫を adjust で補正する"""
+    cursor = await db.execute(
+        """
+        SELECT
+            lots.id AS lot_id,
+            lots.material_id AS material_id,
+            lots.lot_code AS lot_code,
+            lots.unit_price AS unit_price,
+            COALESCE(SUM(
+                CASE
+                    WHEN transactions.type IN ('in', 'return', 'adjust') THEN transactions.quantity
+                    WHEN transactions.type = 'out' THEN -transactions.quantity
+                    ELSE 0
+                END
+            ), 0) AS current_quantity,
+            COALESCE(SUM(
+                CASE
+                    WHEN transactions.type IN ('in', 'return', 'adjust') THEN transactions.weight
+                    WHEN transactions.type = 'out' THEN -transactions.weight
+                    ELSE 0
+                END
+            ), 0) AS current_weight
+        FROM lots
+        LEFT JOIN transactions ON transactions.lot_id = lots.id
+        GROUP BY lots.id, lots.material_id, lots.lot_code, lots.unit_price
+        HAVING current_quantity < 0 OR current_weight < 0
+        """
+    )
+    rows = await cursor.fetchall()
+
+    for row in rows:
+        adjust_quantity = max(0, -(row["current_quantity"] or 0))
+        adjust_weight = round(max(0.0, -(row["current_weight"] or 0.0)), 3)
+        if adjust_quantity == 0 and adjust_weight == 0:
+            continue
+
+        idempotency_key = (
+            f"auto-adjust-negative-lot:{row['lot_id']}:{adjust_quantity}:{adjust_weight:.3f}"
+        )
+        memo = f"自動補正: 負在庫解消 {row['lot_code']}"
+
+        await db.execute(
+            """
+            INSERT OR IGNORE INTO transactions (
+                material_id,
+                lot_id,
+                type,
+                quantity,
+                weight,
+                unit_price,
+                memo,
+                idempotency_key
+            ) VALUES (?, ?, 'adjust', ?, ?, ?, ?, ?)
+            """,
+            (
+                row["material_id"],
+                row["lot_id"],
+                adjust_quantity,
+                adjust_weight,
+                row["unit_price"],
+                memo,
+                idempotency_key,
+            ),
+        )
+
+    await db.commit()

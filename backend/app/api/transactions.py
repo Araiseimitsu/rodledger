@@ -1,6 +1,7 @@
 """
 トランザクション API ルーター
 """
+import sqlite3
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
@@ -9,6 +10,7 @@ from app.models.models import (
     Material,
     MaterialUpdate,
     Lot,
+    LotCreate,
     LotUpdate,
     Transaction,
     TransactionCreate,
@@ -43,6 +45,19 @@ async def update_lot(lot_id: int, data: LotUpdate):
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
     return lot
+
+
+@router.post("/lots", response_model=Lot, status_code=201)
+async def create_lot(data: LotCreate):
+    """ロット作成"""
+    material = await InventoryService.get_material(data.material_id)
+    if not material:
+        raise HTTPException(status_code=404, detail="Material not found")
+
+    try:
+        return await InventoryService.create_lot(data)
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(status_code=409, detail="Lot code already exists") from exc
 
 
 @router.get("/inventory/{material_id}", response_model=InventorySummary)
