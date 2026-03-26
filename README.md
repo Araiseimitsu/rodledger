@@ -65,12 +65,12 @@ pnpm install
 
 ### フロントエンドの API 接続先
 
-開発環境では `/api` を backend の `http://127.0.0.1:8000` に proxy します。別ホストへ接続する場合は、`frontend/.env` に `VITE_API_BASE_URL` を設定してください。
+本番配信ではフロントエンドも backend の `http://localhost:8020` から同一オリジンで配信します。別ホストへ接続する場合は、`frontend/.env` に `VITE_API_BASE_URL` を設定してください。
 
 例:
 
 ```bash
-VITE_API_BASE_URL=http://127.0.0.1:8000/api
+VITE_API_BASE_URL=http://127.0.0.1:8020/api
 ```
 
 ## 起動方法
@@ -79,21 +79,21 @@ VITE_API_BASE_URL=http://127.0.0.1:8000/api
 
 ```bash
 cd backend
-uv run python -m uvicorn app.main:app --reload --port 8000
+uv run python -m uvicorn app.main:app --reload --port 8020
 ```
 
-APIサーバーが http://localhost:8000 で起動します。
+APIサーバーが http://localhost:8020 で起動し、build 済み frontend も同じ URL で配信されます。
 
 起動時に `No module named uvicorn` が出る場合は、`backend` ディレクトリで `uv sync` を再実行してから、もう一度起動してください。
 
-### 2. Frontend 起動
+### 2. Frontend build
 
 ```bash
 cd frontend
-pnpm dev
+pnpm build
 ```
 
-開発サーバーが http://localhost:5173 で起動します。
+build 出力は `frontend/build` に作成され、backend から配信されます。
 
 ## 機能
 
