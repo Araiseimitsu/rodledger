@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchDashboard, fetchLots, createTransaction } from '$lib/api';
+  import { fetchDashboard, fetchLots, createTransaction, createIdempotencyKey } from '$lib/api';
   import { goto } from '$app/navigation';
 
   let dashboard = $state(null);
@@ -187,10 +187,11 @@
     if (submitting || !selectedLotId || (submission.quantity <= 0 && submission.weight <= 0)) return;
 
     submitting = true;
-    if (!idempotencyKey) {
-      idempotencyKey = crypto.randomUUID();
-    }
     try {
+      if (!idempotencyKey) {
+        idempotencyKey = createIdempotencyKey();
+      }
+
       const selectedLot = lots.find((l) => l.id === Number(selectedLotId));
       await createTransaction({
         material_id: dashboard.material.id,

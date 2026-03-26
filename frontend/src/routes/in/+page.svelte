@@ -1,6 +1,6 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchDashboard, fetchLots, createLot, createTransaction } from '$lib/api';
+  import { fetchDashboard, fetchLots, createLot, createTransaction, createIdempotencyKey } from '$lib/api';
   import { goto } from '$app/navigation';
 
   let dashboard = $state(null);
@@ -176,10 +176,11 @@
     if (submitting || !canSubmit()) return;
 
     submitting = true;
-    if (!idempotencyKey) {
-      idempotencyKey = crypto.randomUUID();
-    }
     try {
+      if (!idempotencyKey) {
+        idempotencyKey = createIdempotencyKey();
+      }
+
       let targetLot;
 
       if (lotMode === 'new') {
