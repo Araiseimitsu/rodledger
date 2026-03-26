@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>RodLedger β - Outbound Entry</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Serif:ital,wght@0,400;0,700;1,400&amp;family=Manrope:wght@300;400;500;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "secondary-fixed-dim": "#c7d7e1",
+                        "on-primary": "#eaffd3",
+                        "on-background": "#2b3437",
+                        "inverse-primary": "#e3f8cc",
+                        "primary-dim": "#475737",
+                        "surface-container-lowest": "#ffffff",
+                        "on-secondary-container": "#45545c",
+                        "surface-container-highest": "#dbe4e7",
+                        "on-tertiary-fixed-variant": "#634e00",
+                        "on-secondary-fixed-variant": "#4e5e66",
+                        "on-primary-container": "#465736",
+                        "primary-fixed-dim": "#c7dbb1",
+                        "surface-container-low": "#f1f4f6",
+                        "on-tertiary": "#fff8ef",
+                        "background": "#f8f9fa",
+                        "surface-tint": "#526442",
+                        "on-primary-fixed-variant": "#506140",
+                        "tertiary-dim": "#665100",
+                        "on-secondary-fixed": "#324149",
+                        "secondary-fixed": "#d5e5ef",
+                        "on-tertiary-fixed": "#413200",
+                        "secondary": "#52616a",
+                        "tertiary": "#745c00",
+                        "surface-variant": "#dbe4e7",
+                        "on-secondary": "#f3faff",
+                        "on-error-container": "#752121",
+                        "on-surface": "#2b3437",
+                        "tertiary-fixed": "#f5ce53",
+                        "inverse-surface": "#0c0f10",
+                        "error-dim": "#4e0309",
+                        "secondary-dim": "#46555e",
+                        "error-container": "#fe8983",
+                        "primary-fixed": "#d5e9bf",
+                        "primary-container": "#d5e9bf",
+                        "surface-container": "#eaeff1",
+                        "on-tertiary-container": "#584500",
+                        "tertiary-fixed-dim": "#e6c047",
+                        "surface-dim": "#d1dce0",
+                        "surface-bright": "#f8f9fa",
+                        "on-error": "#fff7f6",
+                        "primary": "#526442",
+                        "error": "#9f403d",
+                        "surface": "#f8f9fa",
+                        "surface-container-high": "#e3e9ec",
+                        "inverse-on-surface": "#9b9d9e",
+                        "on-surface-variant": "#586064",
+                        "on-primary-fixed": "#344426",
+                        "outline": "#737c7f",
+                        "outline-variant": "#abb3b7",
+                        "secondary-container": "#d5e5ef",
+                        "tertiary-container": "#f5ce53"
+                    },
+                    fontFamily: {
+                        "headline": ["Noto Serif"],
+                        "body": ["Manrope"],
+                        "label": ["Manrope"]
+                    },
+                    borderRadius: {"DEFAULT": "0.125rem", "lg": "0.25rem", "xl": "0.5rem", "full": "0.75rem"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body { font-family: 'Manrope', sans-serif; }
+        .font-serif { font-family: 'Noto Serif', serif; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background min-h-screen pb-24">
+<!-- TopAppBar -->
+<header class="fixed top-0 w-full z-50 bg-[#f8f9fa]/70 backdrop-blur-2xl shadow-[0_12px_40px_rgba(43,52,55,0.06)] flex items-center justify-between px-8 h-16">
+<div class="flex items-center gap-4">
+<button class="text-[#526442] hover:bg-[#eaeff1] p-2 rounded-full transition-colors duration-300">
+<span class="material-symbols-outlined">menu</span>
+</button>
+<h1 class="font-serif italic text-xl text-[#2b3437]">RodLedger β</h1>
+</div>
+<div class="flex items-center gap-6">
+<nav class="hidden md:flex gap-8">
+<a class="text-[#586064] hover:text-[#526442] font-medium transition-colors" href="#">Home</a>
+<a class="text-[#586064] hover:text-[#526442] font-medium transition-colors" href="#">In</a>
+<a class="text-[#526442] font-semibold" href="#">Out</a>
+<a class="text-[#586064] hover:text-[#526442] font-medium transition-colors" href="#">History</a>
+</nav>
+<div class="w-8 h-8 rounded-full bg-surface-container-highest overflow-hidden">
+<img alt="User profile" data-alt="minimalist user avatar profile picture placeholder in soft grey tones" src="https://lh3.googleusercontent.com/aida-public/AB6AXuBe85IGk_4yMgh0lKWYKBpRDeaY5EW0WSybAT6fCq5hVCcSgFtz04vFoJiTlCyGpIbAooQ0_rwDltAV8GBlgTt94Ca-TURaK90avnV64OpWtIikLiQ71WFzRPjwZS2i8KDf7uj0Knayo9ZHUJosGg23IX_NiT3JiOPD_eOPhe8TjdtyWKmSu66RI40NJBtnIZLzTW9_YERHg4pSp6eeJhoyDMRAo-zn2OawFC6siNYyIInzgsfCtOkrk7rZjKNHO7xNhIdZemoFoRBF"/>
+</div>
+</div>
+</header>
+<!-- Main Content -->
+<main class="pt-24 px-8 max-w-4xl mx-auto">
+<div class="flex flex-col gap-12 mt-8">
+<!-- Header Section -->
+<section class="asymmetric-header">
+<h2 class="font-serif text-4xl text-on-surface leading-tight tracking-tight mb-2">Material Dispatch</h2>
+<p class="font-body text-on-surface-variant max-w-md">Record outbound material or return excess stock to the ledger archive.</p>
+</section>
+<!-- Action Card: Glassmorphic Container -->
+<div class="bg-surface-container-low rounded-xl p-1 shadow-sm overflow-hidden">
+<div class="bg-surface-container-lowest rounded-lg p-8 md:p-12">
+<!-- Segmented Control -->
+<div class="flex justify-center mb-16">
+<div class="inline-flex p-1 bg-surface-container rounded-full w-full max-w-xs">
+<button class="flex-1 py-2 px-6 rounded-full text-sm font-semibold bg-primary text-on-primary shadow-sm transition-all">Out</button>
+<button class="flex-1 py-2 px-6 rounded-full text-sm font-medium text-on-surface-variant hover:text-on-surface transition-all">Return</button>
+</div>
+</div>
+<form class="space-y-12">
+<!-- Lot Selection Cluster -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-12 items-end">
+<div class="space-y-4">
+<label class="block text-[11px] uppercase tracking-widest font-bold text-on-surface-variant ml-1">Select Material Lot</label>
+<div class="relative">
+<select class="w-full bg-surface-container-low border-none rounded-lg px-4 py-4 appearance-none focus:ring-2 focus:ring-primary/40 text-on-surface font-medium cursor-pointer">
+<option>S-294 Carbon Fiber Rods</option>
+<option>A-102 High-Tensile Steel</option>
+<option>T-400 Titanium Grade 5</option>
+<option>G-90 Fiberglass Filament</option>
+</select>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Inventory Status Context (Asymmetric Info) -->
+<div class="bg-surface-container rounded-lg p-4 flex items-center gap-4">
+<div class="w-12 h-12 rounded bg-surface-container-highest flex items-center justify-center">
+<span class="material-symbols-outlined text-primary">inventory_2</span>
+</div>
+<div>
+<p class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant">Current Stock</p>
+<p class="font-serif text-2xl text-on-surface">1,240 <span class="text-sm font-sans font-normal text-on-surface-variant">units</span></p>
+</div>
+</div>
+</div>
+<!-- Quantity Entry -->
+<div class="max-w-md mx-auto py-8 border-y border-outline-variant/15">
+<label class="block text-center text-[11px] uppercase tracking-widest font-bold text-on-surface-variant mb-6">Dispatch Quantity</label>
+<div class="flex items-center justify-between gap-8">
+<button class="w-14 h-14 rounded-full flex items-center justify-center bg-surface-container hover:bg-surface-container-high transition-colors text-on-surface" type="button">
+<span class="material-symbols-outlined">remove</span>
+</button>
+<input class="w-full text-center font-serif text-6xl bg-transparent border-none focus:ring-0 text-on-surface placeholder-outline-variant/30" placeholder="00" type="number" value="24"/>
+<button class="w-14 h-14 rounded-full flex items-center justify-center bg-surface-container hover:bg-surface-container-high transition-colors text-on-surface" type="button">
+<span class="material-symbols-outlined">add</span>
+</button>
+</div>
+</div>
+<!-- Footer Actions -->
+<div class="flex flex-col md:flex-row items-center justify-between gap-6 pt-4">
+<div class="flex items-center gap-2 text-on-surface-variant">
+<span class="material-symbols-outlined text-sm">schedule</span>
+<span class="text-xs font-medium tracking-wide">Timestamp: Today, 14:32 PM</span>
+</div>
+<div class="flex gap-4 w-full md:w-auto">
+<button class="flex-1 md:flex-none px-8 py-4 rounded-lg bg-surface-container-highest text-on-secondary-container font-semibold text-sm hover:opacity-80 transition-all" type="button">
+                                    Cancel
+                                </button>
+<button class="flex-1 md:flex-none px-12 py-4 rounded-lg bg-primary text-on-primary font-semibold text-sm shadow-sm hover:opacity-90 active:scale-95 transition-all" type="submit">
+                                    Confirm Out
+                                </button>
+</div>
+</div>
+</form>
+</div>
+</div>
+<!-- Contextual Archive Preview (Asymmetry & Depth) -->
+<section class="mt-8 mb-12">
+<div class="flex justify-between items-end mb-6">
+<h3 class="font-serif text-xl">Recent Outbound Flow</h3>
+<a class="text-xs font-bold uppercase tracking-widest text-primary border-b border-primary/20 pb-1" href="#">View Archive</a>
+</div>
+<div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+<!-- Glass Item 1 -->
+<div class="bg-surface-container-low p-6 rounded-lg transition-all hover:bg-surface-container-high group">
+<div class="flex justify-between items-start mb-4">
+<span class="material-symbols-outlined text-[#abb3b7] group-hover:text-primary transition-colors">north_east</span>
+<span class="text-[10px] font-bold text-on-surface-variant uppercase">2h ago</span>
+</div>
+<p class="text-sm font-semibold text-on-surface mb-1">Carbon Rods S-294</p>
+<p class="font-serif text-2xl text-on-surface">45 <span class="text-xs font-sans font-normal text-on-surface-variant">units</span></p>
+</div>
+<!-- Glass Item 2 -->
+<div class="bg-surface-container-low p-6 rounded-lg transition-all hover:bg-surface-container-high group border-l-2 border-primary/20">
+<div class="flex justify-between items-start mb-4">
+<span class="material-symbols-outlined text-[#abb3b7] group-hover:text-primary transition-colors">north_east</span>
+<span class="text-[10px] font-bold text-on-surface-variant uppercase">5h ago</span>
+</div>
+<p class="text-sm font-semibold text-on-surface mb-1">Steel Alloy A-102</p>
+<p class="font-serif text-2xl text-on-surface">112 <span class="text-xs font-sans font-normal text-on-surface-variant">units</span></p>
+</div>
+<!-- Glass Item 3 (Return Example) -->
+<div class="bg-surface-container-low p-6 rounded-lg transition-all hover:bg-surface-container-high group">
+<div class="flex justify-between items-start mb-4">
+<span class="material-symbols-outlined text-[#abb3b7] group-hover:text-tertiary transition-colors">south_west</span>
+<span class="text-[10px] font-bold text-on-surface-variant uppercase">Yesterday</span>
+</div>
+<p class="text-sm font-semibold text-on-surface mb-1">Titanium T-400</p>
+<p class="font-serif text-2xl text-on-surface">12 <span class="text-xs font-sans font-normal text-on-surface-variant">units</span></p>
+</div>
+</div>
+</section>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 bg-[#ffffff]/80 backdrop-blur-3xl border-t-[0.5px] border-[#abb3b7]/15 shadow-[0_-8px_30px_rgba(0,0,0,0.04)] h-20 px-6 pb-safe flex justify-around items-center md:hidden">
+<a class="flex flex-col items-center justify-center text-[#586064] opacity-60 hover:opacity-100 transition-opacity" href="#">
+<span class="material-symbols-outlined">home</span>
+<span class="font-sans text-[11px] font-medium tracking-wide mt-1">Home</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#586064] opacity-60 hover:opacity-100 transition-opacity" href="#">
+<span class="material-symbols-outlined">south_west</span>
+<span class="font-sans text-[11px] font-medium tracking-wide mt-1">In</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#526442] scale-110 transition-transform" href="#">
+<span class="material-symbols-outlined" style="font-variation-settings: 'FILL' 1;">north_east</span>
+<span class="font-sans text-[11px] font-medium tracking-wide mt-1">Out</span>
+</a>
+<a class="flex flex-col items-center justify-center text-[#586064] opacity-60 hover:opacity-100 transition-opacity" href="#">
+<span class="material-symbols-outlined">history</span>
+<span class="font-sans text-[11px] font-medium tracking-wide mt-1">History</span>
+</a>
+</nav>
+</body></html>
