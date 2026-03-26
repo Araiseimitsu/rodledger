@@ -5,13 +5,19 @@ import aiosqlite
 from pathlib import Path
 
 DATABASE_PATH = Path(__file__).parent.parent / "data" / "rodledger.db"
+SQLITE_TIMEOUT_SECONDS = 30
+SQLITE_BUSY_TIMEOUT_MS = 30000
 
 
 async def get_db() -> aiosqlite.Connection:
     """データベース接続を取得"""
     DATABASE_PATH.parent.mkdir(parents=True, exist_ok=True)
-    db = await aiosqlite.connect(DATABASE_PATH)
+    db = await aiosqlite.connect(DATABASE_PATH, timeout=SQLITE_TIMEOUT_SECONDS)
     db.row_factory = aiosqlite.Row
+    await db.execute(f"PRAGMA busy_timeout = {SQLITE_BUSY_TIMEOUT_MS}")
+    await db.execute("PRAGMA journal_mode = WAL")
+    await db.execute("PRAGMA synchronous = NORMAL")
+    await db.execute("PRAGMA foreign_keys = ON")
     return db
 
 

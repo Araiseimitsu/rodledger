@@ -27,7 +27,19 @@
   );
   const selectableLots = $derived(
     mode === 'out'
-      ? lots.filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id))
+      ? lots
+          .filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id))
+          .slice()
+          .sort((left, right) => {
+            const leftTime = new Date(left.created_at).getTime();
+            const rightTime = new Date(right.created_at).getTime();
+
+            if (leftTime !== rightTime) {
+              return leftTime - rightTime;
+            }
+
+            return left.id - right.id;
+          })
       : lots
   );
   const selectedLotSummary = $derived(
@@ -271,9 +283,9 @@
           <div class="space-y-3">
             {#if mode === 'out' && dashboard?.oldest_available_lot_id}
               <div class="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
-                FIFO に従い、現在は
+                FIFO の初期候補として
                 <span class="font-semibold">{lotSummaries.find((lot) => lot.lot_id === dashboard.oldest_available_lot_id)?.lot_code}</span>
-                から出庫します。
+                を表示しています。必要に応じて他のロットにも切り替えできます。
               </div>
             {/if}
             <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"

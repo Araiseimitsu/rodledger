@@ -4,6 +4,7 @@
  */
 
 const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000);
 
 async function getErrorMessage(res) {
   const contentType = res.headers.get('content-type') || '';
@@ -30,11 +31,28 @@ async function getErrorMessage(res) {
 }
 
 async function request(path, options = {}) {
-  const res = await fetch(`${API_BASE}${path}`, options);
-  if (!res.ok) {
-    throw new Error(await getErrorMessage(res));
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), Number.isFinite(API_TIMEOUT_MS) ? API_TIMEOUT_MS : 15000);
+
+  try {
+    const res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      signal: controller.signal,
+    });
+
+    if (!res.ok) {
+      throw new Error(await getErrorMessage(res));
+    }
+
+    return res;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error('API の応答がタイムアウトしました。サーバーの状態を確認してください');
+    }
+    throw error;
+  } finally {
+    clearTimeout(timeoutId);
   }
-  return res;
 }
 
 async function requestJson(path, options = {}) {

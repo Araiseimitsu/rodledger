@@ -50,9 +50,9 @@
   </header>
 
   <!-- Main Content -->
-  <main class="pt-20">
+  <div class="pt-20">
     {@render children()}
-  </main>
+  </div>
 
   <!-- BottomNavBar (Mobile) -->
   <nav class="md:hidden fixed bottom-0 left-0 w-full flex justify-around items-center h-20 px-6 bg-white/80 backdrop-blur-3xl z-50 rounded-t-xl border-t border-outline-variant/15 shadow-[0_-8px_30px_rgba(0,0,0,0.04)]">
