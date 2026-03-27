@@ -355,18 +355,18 @@
               <p class="mt-1 text-sm text-on-surface-variant">登録日 {formatDate(lotSummary.created_at)} / 単価 ¥{formatSpecNumber(lotSummary.unit_price, 1)}kg</p>
             </div>
 
-            <div class="grid grid-cols-3 gap-4 text-right md:min-w-[24rem]">
-              <div>
+            <div class="grid grid-cols-1 gap-4 text-left sm:grid-cols-3 sm:text-right md:min-w-0 md:w-full lg:min-w-[24rem]">
+              <div class="min-w-0">
                 <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">残本数</p>
-                <p class="mt-1 font-headline text-2xl text-on-surface">{formatNumber(lotSummary.current_quantity)}</p>
+                <p class="mt-1 font-headline text-2xl leading-none tabular-nums text-on-surface whitespace-nowrap">{formatNumber(lotSummary.current_quantity)}</p>
               </div>
-              <div>
+              <div class="min-w-0">
                 <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">残重量</p>
-                <p class="mt-1 font-headline text-2xl text-on-surface">{formatSpecNumber(lotSummary.current_weight, 3)}</p>
+                <p class="mt-1 font-headline text-2xl leading-none tabular-nums text-on-surface whitespace-nowrap">{formatSpecNumber(lotSummary.current_weight, 3)}</p>
               </div>
-              <div>
+              <div class="min-w-0">
                 <p class="text-[10px] uppercase tracking-widest text-on-surface-variant">在庫金額</p>
-                <p class="mt-1 font-headline text-2xl text-on-surface">¥{formatNumber(Math.round(lotSummary.current_value))}</p>
+                <p class="mt-1 font-headline text-2xl leading-none tabular-nums text-on-surface whitespace-nowrap">¥{formatNumber(Math.round(lotSummary.current_value))}</p>
               </div>
             </div>
           </div>

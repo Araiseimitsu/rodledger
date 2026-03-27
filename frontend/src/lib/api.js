@@ -3,11 +3,16 @@
  * インフラストラクチャ層
  */
 
-const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api').replace(/\/$/, '');
+const API_BASE = (import.meta.env.VITE_API_BASE_URL || "/api").replace(
+  /\/$/,
+  "",
+);
 const API_TIMEOUT_MS = Number(import.meta.env.VITE_API_TIMEOUT_MS || 15000);
 
 function formatUuidBytes(bytes) {
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
+  const hex = Array.from(bytes, (byte) =>
+    byte.toString(16).padStart(2, "0"),
+  ).join("");
   return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
@@ -24,19 +29,24 @@ export function createIdempotencyKey() {
     return formatUuidBytes(bytes);
   }
 
-  const timestamp = Date.now().toString(16).padStart(12, '0').slice(-12);
-  const random = Math.random().toString(16).slice(2).padEnd(20, '0').slice(0, 20);
+  const timestamp = Date.now().toString(16).padStart(12, "0").slice(-12);
+  const random = Math.random()
+    .toString(16)
+    .slice(2)
+    .padEnd(20, "0")
+    .slice(0, 20);
   return `${timestamp.slice(0, 8)}-${timestamp.slice(8, 12)}-4000-8000-${random}`;
 }
 
 async function getErrorMessage(res) {
-  const contentType = res.headers.get('content-type') || '';
+  const contentType = res.headers.get("content-type") || "";
 
-  if (contentType.includes('application/json')) {
+  if (contentType.includes("application/json")) {
     try {
       const data = await res.json();
-      if (typeof data?.detail === 'string' && data.detail) return data.detail;
-      if (typeof data?.message === 'string' && data.message) return data.message;
+      if (typeof data?.detail === "string" && data.detail) return data.detail;
+      if (typeof data?.message === "string" && data.message)
+        return data.message;
       return JSON.stringify(data);
     } catch {
       // fall through to text/status handling
@@ -55,7 +65,10 @@ async function getErrorMessage(res) {
 
 async function request(path, options = {}) {
   const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), Number.isFinite(API_TIMEOUT_MS) ? API_TIMEOUT_MS : 15000);
+  const timeoutId = setTimeout(
+    () => controller.abort(),
+    Number.isFinite(API_TIMEOUT_MS) ? API_TIMEOUT_MS : 15000,
+  );
 
   try {
     const res = await fetch(`${API_BASE}${path}`, {
@@ -69,8 +82,10 @@ async function request(path, options = {}) {
 
     return res;
   } catch (error) {
-    if (error?.name === 'AbortError') {
-      throw new Error('API の応答がタイムアウトしました。サーバーの状態を確認してください');
+    if (error?.name === "AbortError") {
+      throw new Error(
+        "API の応答がタイムアウトしました。サーバーの状態を確認してください",
+      );
     }
     throw error;
   } finally {
@@ -175,7 +190,7 @@ async function requestJson(path, options = {}) {
  * @returns {Promise<DashboardStats>}
  */
 export async function fetchDashboard() {
-  return requestJson('/dashboard');
+  return requestJson("/dashboard");
 }
 
 /**
@@ -186,8 +201,8 @@ export async function fetchDashboard() {
  */
 export async function updateMaterial(id, data) {
   return requestJson(`/materials/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }
@@ -203,17 +218,17 @@ export async function updateMaterial(id, data) {
 export async function fetchTransactions(params = {}) {
   const query = new URLSearchParams();
   if (params.material_id !== undefined && params.material_id !== null) {
-    query.set('material_id', String(params.material_id));
+    query.set("material_id", String(params.material_id));
   }
-  if (params.type) query.set('type', params.type);
+  if (params.type) query.set("type", params.type);
   if (params.limit !== undefined && params.limit !== null) {
-    query.set('limit', String(params.limit));
+    query.set("limit", String(params.limit));
   }
   if (params.offset !== undefined && params.offset !== null) {
-    query.set('offset', String(params.offset));
+    query.set("offset", String(params.offset));
   }
 
-  const suffix = query.toString() ? `?${query}` : '';
+  const suffix = query.toString() ? `?${query}` : "";
   return requestJson(`/transactions${suffix}`);
 }
 
@@ -223,9 +238,9 @@ export async function fetchTransactions(params = {}) {
  * @returns {Promise<Transaction>}
  */
 export async function createTransaction(data) {
-  return requestJson('/transactions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  return requestJson("/transactions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }
@@ -241,12 +256,12 @@ export async function createTransaction(data) {
  */
 export async function updateTransaction(id, data) {
   const query = new URLSearchParams();
-  if (data.quantity !== undefined) query.set('quantity', String(data.quantity));
-  if (data.weight !== undefined) query.set('weight', String(data.weight));
-  if (data.memo !== undefined) query.set('memo', data.memo);
+  if (data.quantity !== undefined) query.set("quantity", String(data.quantity));
+  if (data.weight !== undefined) query.set("weight", String(data.weight));
+  if (data.memo !== undefined) query.set("memo", data.memo);
 
   return requestJson(`/transactions/${id}?${query}`, {
-    method: 'PUT',
+    method: "PUT",
   });
 }
 
@@ -256,7 +271,7 @@ export async function updateTransaction(id, data) {
  */
 export async function deleteTransaction(id) {
   await request(`/transactions/${id}`, {
-    method: 'DELETE',
+    method: "DELETE",
   });
 }
 
@@ -275,9 +290,9 @@ export async function fetchLots(materialId) {
  * @returns {Promise<Lot>}
  */
 export async function createLot(data) {
-  return requestJson('/lots', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+  return requestJson("/lots", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }
@@ -290,8 +305,8 @@ export async function createLot(data) {
  */
 export async function updateLot(id, data) {
   return requestJson(`/lots/${id}`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(data),
   });
 }
