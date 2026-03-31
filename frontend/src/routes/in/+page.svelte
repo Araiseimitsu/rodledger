@@ -391,7 +391,7 @@
               </div>
             </div>
 
-            <div class="grid grid-cols-1 2xl:grid-cols-2 gap-6 items-start">
+            <div class="grid grid-cols-1 gap-6 items-start">
               <div class="space-y-3 min-w-0">
                 <div class="flex items-center justify-between gap-4">
                   <label for="quantity-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
