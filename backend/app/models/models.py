@@ -118,7 +118,9 @@ class InventorySummary(BaseModel):
     """在庫サマリー"""
     material_id: int
     material_name: str
+    weight_per_unit: float
     total_quantity: int
+    total_effective_quantity: int
     total_weight: float
     total_value: float
     lot_summaries: list[LotInventorySummary] = Field(default_factory=list)
@@ -129,6 +131,7 @@ class DashboardStats(BaseModel):
     """ダッシュボード統計"""
     material: Material
     total_quantity: int
+    total_effective_quantity: int
     total_weight: float
     total_value: float
     lot_summaries: list[LotInventorySummary] = Field(default_factory=list)

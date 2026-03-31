@@ -28,11 +28,85 @@ class InsufficientInventoryError(Exception):
 class InventoryService:
     """在庫計算ロジック"""
 
+    # 重量は 0.001kg 単位で表示・積み上げるため、本数×単重の換算値が残重量をわずかに超えることがある
+    _OUTBOUND_WEIGHT_TOLERANCE_KG = 0.001
+
     @staticmethod
     def _normalize_zero(value: float, digits: int = 3) -> float:
         """丸め後の -0.0 を 0.0 に正規化する"""
         rounded = round(value, digits)
         return 0.0 if rounded == 0 else rounded
+
+    @staticmethod
+    def _quantity_from_weight_like_frontend(weight: float, weight_per_unit: float) -> int:
+        """
+        フロントの calculateQuantityFromWeight（normalizeWeight + Math.round）に揃えた本数換算。
+        Python の round と JS の Math.round の差を避けるため、非負実数では floor(x+0.5) を使う。
+        """
+        if weight_per_unit <= 0 or not math.isfinite(weight_per_unit):
+            return 0
+        w = InventoryService._normalize_zero(max(0.0, weight), 3)
+        ratio = w / weight_per_unit
+        if not math.isfinite(ratio):
+            return 0
+        return max(0, int(math.floor(ratio + 0.5)))
+
+    @staticmethod
+    def _outbound_weight_within_stock(request_weight: float, stock_weight: float) -> bool:
+        """出庫重量が在庫重量以内か（積み上げ丸めと換算の差を許容）"""
+        rq = InventoryService._normalize_zero(max(0.0, request_weight), 3)
+        sq = InventoryService._normalize_zero(max(0.0, stock_weight), 3)
+        return rq <= sq + InventoryService._OUTBOUND_WEIGHT_TOLERANCE_KG + 1e-9
+
+    @staticmethod
+    def _effective_stock_quantity(
+        quantity: int,
+        weight: float,
+        weight_per_unit: float,
+    ) -> int:
+        """
+        本数と重量を別々に積み上げた結果の丸め誤差で、片方だけゼロ付近に残るケースを実質在庫なしにまとめる。
+        """
+        if weight_per_unit <= 0 or not math.isfinite(weight_per_unit):
+            return quantity if quantity > 0 else (1 if weight > 0 else 0)
+        return max(quantity, InventoryService._quantity_from_weight_like_frontend(weight, weight_per_unit))
+
+    @staticmethod
+    def _total_effective_quantity(
+        lot_summaries: list[LotInventorySummary],
+        weight_per_unit: float,
+    ) -> int:
+        """ロット別の実効本数（帳簿本数と重量換算の大きい方）の合計"""
+        return sum(
+            InventoryService._effective_stock_quantity(
+                lot.current_quantity,
+                lot.current_weight,
+                weight_per_unit,
+            )
+            for lot in lot_summaries
+        )
+
+    @staticmethod
+    def _normalize_lot_summary_for_display(
+        summary: LotInventorySummary,
+        weight_per_unit: float,
+    ) -> LotInventorySummary:
+        """実効在庫ゼロのロットは表示・FIFO・合計から除外する（本数・重量・金額を 0 に正規化）"""
+        if InventoryService._effective_stock_quantity(
+            summary.current_quantity,
+            summary.current_weight,
+            weight_per_unit,
+        ) > 0:
+            return summary
+        return LotInventorySummary(
+            lot_id=summary.lot_id,
+            lot_code=summary.lot_code,
+            unit_price=summary.unit_price,
+            created_at=summary.created_at,
+            current_quantity=0,
+            current_weight=0.0,
+            current_value=0.0,
+        )
 
     @staticmethod
     async def _get_lot_inventory_summaries(
@@ -244,15 +318,25 @@ class InventoryService:
             material = await InventoryService.get_material(material_id)
             if not material:
                 raise ValueError(f"Material not found: {material_id}")
-            lot_summaries = await InventoryService._get_lot_inventory_summaries(db, material_id)
+            lot_summaries_raw = await InventoryService._get_lot_inventory_summaries(db, material_id)
+            lot_summaries = [
+                InventoryService._normalize_lot_summary_for_display(s, material.weight_per_unit)
+                for s in lot_summaries_raw
+            ]
             total_quantity = sum(lot.current_quantity for lot in lot_summaries)
+            total_effective_quantity = InventoryService._total_effective_quantity(
+                lot_summaries,
+                material.weight_per_unit,
+            )
             total_weight = sum(lot.current_weight for lot in lot_summaries)
             total_value = sum(lot.current_value for lot in lot_summaries)
 
             return InventorySummary(
                 material_id=material_id,
                 material_name=material.name,
+                weight_per_unit=material.weight_per_unit,
                 total_quantity=total_quantity,
+                total_effective_quantity=total_effective_quantity,
                 total_weight=InventoryService._normalize_zero(total_weight, 3),
                 total_value=InventoryService._normalize_zero(total_value, 1),
                 lot_summaries=lot_summaries,
@@ -275,7 +359,9 @@ class InventoryService:
 
             if data.type == TransactionType.OUT:
                 inventory = await InventoryService.calculate_inventory(data.material_id)
-                if data.quantity > inventory.total_quantity or data.weight > inventory.total_weight:
+                if data.quantity > inventory.total_effective_quantity or not InventoryService._outbound_weight_within_stock(
+                    data.weight, inventory.total_weight
+                ):
                     raise InsufficientInventoryError("在庫不足です")
 
                 selected_lot = next(
@@ -285,12 +371,28 @@ class InventoryService:
                 if not selected_lot:
                     raise InsufficientInventoryError("出庫対象のロットが見つかりません")
 
-                if data.quantity > selected_lot.current_quantity or data.weight > selected_lot.current_weight:
+                effective_lot = InventoryService._effective_stock_quantity(
+                    selected_lot.current_quantity,
+                    selected_lot.current_weight,
+                    inventory.weight_per_unit,
+                )
+                if data.quantity > effective_lot or not InventoryService._outbound_weight_within_stock(
+                    data.weight, selected_lot.current_weight
+                ):
                     raise InsufficientInventoryError("選択したロットの在庫が不足しています")
 
                 oldest_available_lot_id = inventory.oldest_available_lot_id
                 if oldest_available_lot_id and oldest_available_lot_id != data.lot_id:
                     raise InsufficientInventoryError("古いロットから順に出庫してください")
+
+            insert_quantity = data.quantity
+            insert_weight = data.weight
+            if data.type == TransactionType.OUT:
+                insert_quantity = min(data.quantity, selected_lot.current_quantity)
+                insert_weight = min(
+                    InventoryService._normalize_zero(max(0.0, data.weight), 3),
+                    InventoryService._normalize_zero(selected_lot.current_weight, 3),
+                )
 
             try:
                 cursor = await db.execute(
@@ -303,8 +405,8 @@ class InventoryService:
                         data.material_id,
                         data.lot_id,
                         data.type.value,
-                        data.quantity,
-                        data.weight,
+                        insert_quantity,
+                        insert_weight,
                         data.unit_price,
                         data.memo,
                         data.idempotency_key,
@@ -464,6 +566,7 @@ class InventoryService:
         return DashboardStats(
             material=material,
             total_quantity=inventory.total_quantity,
+            total_effective_quantity=inventory.total_effective_quantity,
             total_weight=inventory.total_weight,
             total_value=inventory.total_value,
             lot_summaries=inventory.lot_summaries,

@@ -1,6 +1,14 @@
 <script>
   import { onMount } from 'svelte';
   import { fetchDashboard, fetchLots, createLot, createTransaction, createIdempotencyKey } from '$lib/api';
+  import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
+  import {
+    beforeWeightInput,
+    parseWeightInputToNumber,
+    preventWeightHalfWidthKeys,
+    sanitizeWeightInputText,
+    weightNumberToInputString,
+  } from '$lib/weightInput.js';
   import { goto } from '$app/navigation';
 
   let dashboard = $state(null);
@@ -18,11 +26,19 @@
   let newLotUnitPrice = $state('');
   let quantity = $state(0);
   let weight = $state(0);
+  /** 重量入力モード時のみ。数値に正規化すると「456.」が「456」になりカーソルが先頭へ飛ぶため文字列で保持 */
+  let weightInputText = $state('');
   let memo = $state('');
   let idempotencyKey = $state('');
 
   const selectedExistingLot = $derived(lots.find((lot) => lot.id === Number(selectedLotId)) ?? null);
   const parsedNewLotUnitPrice = $derived(Number(newLotUnitPrice || 0));
+
+  const weightReadonlyDisplay = $derived.by(() => {
+    const w = normalizeWeight(weight);
+    if (w === 0) return '0';
+    return String(parseFloat(w.toFixed(3)));
+  });
 
 
   function normalizeQuantity(value) {
@@ -64,6 +80,7 @@
     }
 
     quantity = 0;
+    weightInputText = weightNumberToInputString(weight);
   }
 
   function setLotMode(mode) {
@@ -129,11 +146,12 @@
   }
 
   function handleQuantityInput(event) {
-    quantity = normalizeQuantity(event.currentTarget.value);
+    quantity = parseIntegerQuantityInput(event.currentTarget.value);
   }
 
   function handleWeightInput(event) {
-    weight = normalizeWeight(event.currentTarget.value);
+    weightInputText = sanitizeWeightInputText(event.currentTarget.value);
+    weight = parseWeightInputToNumber(weightInputText);
   }
 
   function handleUnitPriceInput(event) {
@@ -302,7 +320,7 @@
                       <option value="">既存ロットがありません</option>
                     {:else}
                       {#each lots as lot}
-                        <option value={lot.id}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
+                        <option value={String(lot.id)}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
                       {/each}
                     {/if}
                   </select>
@@ -337,7 +355,7 @@
                     min="0"
                     step="0.1"
                     oninput={handleUnitPriceInput}
-                    class="no-spinner w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40"
+                    class="no-spinner numeric-input-fluid numeric-input-visible w-full min-w-0 bg-surface-container-low border-none rounded-xl py-4 px-6 text-right tabular-nums text-on-surface focus:ring-2 focus:ring-primary/40"
                   />
                 </div>
               </div>
@@ -418,9 +436,11 @@
                       type="number"
                       value={quantity}
                       min="0"
-                      step={quantityStep}
+                      step="1"
+                      inputmode="numeric"
+                      onkeydown={preventQuantityNonIntegerKeys}
                       oninput={handleQuantityInput}
-                      class="no-spinner min-w-0 w-full text-center tabular-nums leading-none text-2xl md:text-3xl lg:text-4xl font-bold bg-surface-container-low border-none rounded-xl py-4 px-4 md:px-6 text-on-surface focus:ring-2 focus:ring-primary/40"
+                      class="no-spinner numeric-input-fluid numeric-input-visible min-w-0 w-full flex-1 text-center tabular-nums font-bold bg-surface-container-low border-none rounded-xl py-4 px-4 md:px-6 text-on-surface focus:ring-2 focus:ring-primary/40"
                     />
                     <button
                       type="button"
@@ -431,7 +451,9 @@
                     </button>
                   </div>
                 {:else}
-                  <div class="flex items-center justify-center rounded-xl bg-surface-container-low py-6 px-6 text-2xl md:text-3xl font-bold text-on-surface-variant">
+                  <div
+                    class="flex min-w-0 w-full items-center justify-center overflow-x-auto rounded-xl bg-surface-container-low py-6 px-6 numeric-input-fluid font-bold tabular-nums text-on-surface-variant"
+                  >
                     {calculateQuantityFromWeight(weight).toLocaleString('ja-JP')}
                   </div>
                 {/if}
@@ -446,13 +468,15 @@
                 <div class="space-y-2 w-full min-w-0">
                   <input
                     id="weight-input"
-                    type="number"
-                    value={weight}
-                    step="0.001"
-                    min="0"
+                    type="text"
+                    inputmode="decimal"
+                    autocomplete="off"
                     readonly={entryMode === 'quantity'}
-                    oninput={handleWeightInput}
-                    class="no-spinner w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-2xl md:text-3xl lg:text-4xl font-bold tabular-nums text-on-surface {entryMode === 'quantity'
+                    value={entryMode === 'quantity' ? weightReadonlyDisplay : weightInputText}
+                    onbeforeinput={entryMode === 'quantity' ? undefined : beforeWeightInput}
+                    oninput={entryMode === 'quantity' ? undefined : handleWeightInput}
+                    onkeydown={entryMode === 'quantity' ? undefined : preventWeightHalfWidthKeys}
+                    class="no-spinner numeric-input-fluid numeric-input-visible w-full min-w-0 bg-surface-container-low border-none rounded-xl py-4 px-6 text-right font-bold tabular-nums text-on-surface {entryMode === 'quantity'
                       ? 'opacity-70'
                       : 'focus:ring-2 focus:ring-primary/40'}"
                   />
@@ -511,7 +535,7 @@
             <div>
               <p class="text-[10px] uppercase tracking-wider font-bold text-on-surface-variant">現在在庫</p>
               <p class="font-headline text-2xl text-on-surface"
-                >{dashboard.total_quantity.toLocaleString()}
+                >{(dashboard.total_effective_quantity ?? dashboard.total_quantity).toLocaleString()}
                 <span class="text-sm font-sans font-normal text-on-surface-variant">本</span></p
               >
             </div>

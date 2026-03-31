@@ -166,6 +166,7 @@ async function requestJson(path, options = {}) {
  * @typedef {Object} DashboardStats
  * @property {Material} material
  * @property {number} total_quantity
+ * @property {number} total_effective_quantity
  * @property {number} total_weight
  * @property {number} total_value
  * @property {LotInventorySummary[]} lot_summaries

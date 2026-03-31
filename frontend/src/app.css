@@ -26,3 +26,26 @@ body {
   -moz-appearance: textfield;
   appearance: textfield;
 }
+
+/* 入庫・出庫など: 画面幅が狭くても数値が欠けないようにする */
+@layer utilities {
+  .numeric-input-fluid {
+    font-size: clamp(1.125rem, 1.2rem + 1.25vw, 2.25rem);
+    line-height: 1.15;
+  }
+
+  .numeric-input-visible {
+    min-width: 0;
+    max-width: 100%;
+    overflow-x: auto;
+    scrollbar-width: thin;
+  }
+
+  @supports (field-sizing: content) {
+    input.numeric-input-visible[type='number'] {
+      field-sizing: content;
+      min-inline-size: 6ch;
+      max-inline-size: 100%;
+    }
+  }
+}

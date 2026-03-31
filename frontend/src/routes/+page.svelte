@@ -300,7 +300,7 @@
         </div>
         <p class="text-on-surface-variant text-sm font-label mb-1">現在本数</p>
         <div class="flex items-baseline gap-2">
-          <span class="text-5xl font-headline text-on-surface">{formatNumber(dashboard.total_quantity)}</span>
+          <span class="text-5xl font-headline text-on-surface">{formatNumber(dashboard.total_effective_quantity ?? dashboard.total_quantity)}</span>
           <span class="text-xl font-label text-on-surface-variant">本</span>
         </div>
       </div>
@@ -336,7 +336,7 @@
           <p class="mt-2 text-sm text-on-surface-variant">総数を維持したまま、各ロットの残本数と残重量を確認できます。</p>
         </div>
         <p class="text-sm text-on-surface-variant">
-          合計 {formatNumber(dashboard.total_quantity)} 本 / {formatSpecNumber(dashboard.total_weight, 3)} kg
+          合計 {formatNumber(dashboard.total_effective_quantity ?? dashboard.total_quantity)} 本 / {formatSpecNumber(dashboard.total_weight, 3)} kg
         </p>
       </div>
 
