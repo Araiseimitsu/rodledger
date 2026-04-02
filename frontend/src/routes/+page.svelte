@@ -1,6 +1,11 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchDashboard, fetchLots, updateLot, updateMaterial } from '$lib/api';
+  import { fetchDashboard, fetchLots, fetchLotSummariesPage, fetchTransactions, updateLot, updateMaterial } from '$lib/api';
+  import PaginationBar from '$lib/PaginationBar.svelte';
+  import { maxPageIndex, SEARCH_DEBOUNCE_MS } from '$lib/pagination.js';
+
+  const LOT_PAGE_SIZE = 10;
+  const RECENT_PAGE_SIZE = 5;
 
   let dashboard = $state(null);
   let currentLot = $state(null);
@@ -17,8 +22,105 @@
     unit_price: '',
   });
 
+  let lotSummariesPage = $state([]);
+  let lotSummariesTotal = $state(0);
+  let lotPage = $state(1);
+  let lotSearchInput = $state('');
+  let lotSearchDebounced = $state('');
+  let lotListLoading = $state(false);
+
+  let recentItems = $state([]);
+  let recentTotal = $state(0);
+  let recentPage = $state(1);
+  let recentSearchInput = $state('');
+  let recentSearchDebounced = $state('');
+  let recentLoading = $state(false);
+
+  let lotLoadVersion = 0;
+  let recentLoadVersion = 0;
+
   onMount(async () => {
     await loadDashboard();
+  });
+
+  $effect(() => {
+    lotSearchInput;
+    const t = setTimeout(() => {
+      lotSearchDebounced = lotSearchInput;
+      lotPage = 1;
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
+
+  $effect(() => {
+    recentSearchInput;
+    const t = setTimeout(() => {
+      recentSearchDebounced = recentSearchInput;
+      recentPage = 1;
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
+
+  async function loadLotSummariesSection() {
+    if (!dashboard?.material?.id) return;
+    const v = ++lotLoadVersion;
+    lotListLoading = true;
+    try {
+      const offset = (lotPage - 1) * LOT_PAGE_SIZE;
+      const { items, total } = await fetchLotSummariesPage(dashboard.material.id, {
+        limit: LOT_PAGE_SIZE,
+        offset,
+        q: lotSearchDebounced.trim() || undefined,
+        nonzero_only: true,
+      });
+      if (v !== lotLoadVersion) return;
+      lotSummariesPage = items;
+      lotSummariesTotal = total;
+      const cap = maxPageIndex(total, LOT_PAGE_SIZE);
+      if (lotPage > cap) lotPage = cap;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (v === lotLoadVersion) lotListLoading = false;
+    }
+  }
+
+  async function loadRecentSection() {
+    if (!dashboard?.material?.id) return;
+    const v = ++recentLoadVersion;
+    recentLoading = true;
+    try {
+      const offset = (recentPage - 1) * RECENT_PAGE_SIZE;
+      const { items, total } = await fetchTransactions({
+        material_id: dashboard.material.id,
+        limit: RECENT_PAGE_SIZE,
+        offset,
+        q: recentSearchDebounced.trim() || undefined,
+      });
+      if (v !== recentLoadVersion) return;
+      recentItems = items;
+      recentTotal = total;
+      const cap = maxPageIndex(total, RECENT_PAGE_SIZE);
+      if (recentPage > cap) recentPage = cap;
+    } catch (e) {
+      console.error(e);
+    } finally {
+      if (v === recentLoadVersion) recentLoading = false;
+    }
+  }
+
+  $effect(() => {
+    dashboard?.material?.id;
+    lotPage;
+    lotSearchDebounced;
+    loadLotSummariesSection();
+  });
+
+  $effect(() => {
+    dashboard?.material?.id;
+    recentPage;
+    recentSearchDebounced;
+    loadRecentSection();
   });
 
   async function loadDashboard(showLoader = true) {
@@ -27,7 +129,7 @@
 
     try {
       const nextDashboard = await fetchDashboard();
-      const lots = await fetchLots(nextDashboard.material.id);
+      const { items: lots } = await fetchLots(nextDashboard.material.id);
 
       dashboard = nextDashboard;
       currentLot = lots[0] ?? null;
@@ -334,14 +436,39 @@
         <div>
           <h3 class="font-headline text-2xl text-on-surface">ロット別在庫</h3>
           <p class="mt-2 text-sm text-on-surface-variant">総数を維持したまま、各ロットの残本数と残重量を確認できます。</p>
+          <a href="/lots" class="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline">
+            <span class="material-symbols-outlined text-base">edit_square</span>
+            ロットコード・単価の修正
+          </a>
         </div>
         <p class="text-sm text-on-surface-variant">
           合計 {formatNumber(dashboard.total_effective_quantity ?? dashboard.total_quantity)} 本 / {formatSpecNumber(dashboard.total_weight, 3)} kg
         </p>
       </div>
 
+      <div class="mb-4 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div class="relative w-full max-w-md">
+          <span
+            class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm"
+            >search</span
+          >
+          <input
+            type="text"
+            bind:value={lotSearchInput}
+            placeholder="ロットコードで検索"
+            class="w-full rounded-xl border border-outline-variant/15 bg-surface-container-low py-3 pl-12 pr-4 text-sm text-on-surface placeholder:text-outline-variant focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
+        <PaginationBar bind:page={lotPage} total={lotSummariesTotal} pageSize={LOT_PAGE_SIZE} disabled={lotListLoading} />
+      </div>
+
+      {#if lotListLoading && lotSummariesPage.length === 0}
+        <div class="flex justify-center py-12">
+          <span class="material-symbols-outlined text-3xl animate-spin text-primary">progress_activity</span>
+        </div>
+      {:else}
       <div class="space-y-3">
-        {#each dashboard.lot_summaries as lotSummary}
+        {#each lotSummariesPage as lotSummary (lotSummary.lot_id)}
           <div class="flex flex-col gap-4 rounded-2xl border px-5 py-4 md:flex-row md:items-center md:justify-between {isOldestAvailableLot(lotSummary)
             ? 'border-primary/35 bg-primary/5'
             : 'border-outline-variant/15 bg-surface'}">
@@ -370,17 +497,54 @@
               </div>
             </div>
           </div>
+        {:else}
+          <p class="py-10 text-center text-sm text-on-surface-variant">該当するロットがありません</p>
         {/each}
       </div>
+      {/if}
     </section>
 
     <!-- Recent Transactions -->
     <section class="mt-20">
-      <div class="flex justify-between items-center mb-10">
-        <h3 class="font-headline text-2xl text-on-surface">最近の取引</h3>
+      <div class="mb-6 flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+        <div>
+          <h3 class="font-headline text-2xl text-on-surface">最近の取引</h3>
+          <a href="/history" class="mt-2 inline-flex items-center gap-1 text-sm font-semibold text-primary hover:underline">
+            取引履歴を開く
+            <span class="material-symbols-outlined text-base">open_in_new</span>
+          </a>
+        </div>
+        <div class="relative w-full max-w-md md:max-w-sm">
+          <span
+            class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm"
+            >search</span
+          >
+          <input
+            type="text"
+            bind:value={recentSearchInput}
+            placeholder="メモ・ロット・IDで検索"
+            class="w-full rounded-xl border border-outline-variant/15 bg-surface-container-low py-3 pl-12 pr-4 text-sm text-on-surface placeholder:text-outline-variant focus:ring-2 focus:ring-primary/30"
+          />
+        </div>
       </div>
-      <div class="space-y-3">
-        {#each dashboard.recent_transactions as tx}
+
+      <PaginationBar
+        bind:page={recentPage}
+        total={recentTotal}
+        pageSize={RECENT_PAGE_SIZE}
+        disabled={recentLoading}
+        label="件の取引"
+      />
+
+      <div class="mt-6 space-y-3">
+        {#if recentLoading && recentItems.length === 0}
+          <div class="flex justify-center py-16">
+            <span class="material-symbols-outlined text-3xl animate-spin text-primary">progress_activity</span>
+          </div>
+        {:else if recentItems.length === 0}
+          <p class="py-12 text-center text-sm text-on-surface-variant">該当する取引がありません</p>
+        {:else}
+        {#each recentItems as tx}
           <div class="group flex items-center justify-between p-4 rounded-xl hover:bg-surface-container-lowest transition-all duration-300">
             <div class="flex items-center gap-6">
               <div class="w-12 h-12 rounded-lg bg-surface-container flex items-center justify-center">
@@ -403,6 +567,7 @@
             </div>
           </div>
         {/each}
+        {/if}
       </div>
     </section>
   </div>

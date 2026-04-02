@@ -34,6 +34,15 @@
   const selectedExistingLot = $derived(lots.find((lot) => lot.id === Number(selectedLotId)) ?? null);
   const parsedNewLotUnitPrice = $derived(Number(newLotUnitPrice || 0));
 
+  /** 残本数が 0 のロットは既存ロット一覧に出さない */
+  const lotsWithRemaining = $derived.by(() => {
+    const summaries = dashboard?.lot_summaries ?? [];
+    return lots.filter((lot) => {
+      const s = summaries.find((x) => x.lot_id === lot.id);
+      return s != null && s.current_quantity > 0;
+    });
+  });
+
   const weightReadonlyDisplay = $derived.by(() => {
     const w = normalizeWeight(weight);
     if (w === 0) return '0';
@@ -93,10 +102,11 @@
   }
 
   function syncLotDefaults() {
-    if (lots.length > 0) {
-      selectedLotId = String(lots[0].id);
+    const remaining = lotsWithRemaining;
+    if (remaining.length > 0) {
+      selectedLotId = String(remaining[0].id);
       if (!newLotUnitPrice) {
-        newLotUnitPrice = String(lots[0].unit_price);
+        newLotUnitPrice = String(remaining[0].unit_price);
       }
       if (lotMode !== 'new') {
         lotMode = 'existing';
@@ -114,7 +124,8 @@
 
     try {
       dashboard = await fetchDashboard();
-      lots = await fetchLots(dashboard.material.id);
+      const { items } = await fetchLots(dashboard.material.id);
+      lots = items;
       syncLotDefaults();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';
@@ -285,7 +296,7 @@
                 <button
                   type="button"
                   onclick={() => setLotMode('existing')}
-                  disabled={lots.length === 0}
+                  disabled={lotsWithRemaining.length === 0}
                   class="rounded-full px-5 py-2 text-sm font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed {lotMode === 'existing'
                     ? 'bg-primary text-on-primary'
                     : 'text-on-surface-variant hover:text-on-surface'}"
@@ -313,13 +324,13 @@
                   <select
                     id="lot-select"
                     bind:value={selectedLotId}
-                    disabled={lots.length === 0}
+                    disabled={lotsWithRemaining.length === 0}
                     class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium disabled:opacity-50 disabled:cursor-not-allowed"
                   >
-                    {#if lots.length === 0}
+                    {#if lotsWithRemaining.length === 0}
                       <option value="">既存ロットがありません</option>
                     {:else}
-                      {#each lots as lot}
+                      {#each lotsWithRemaining as lot}
                         <option value={String(lot.id)}>{lot.lot_code} (¥{lot.unit_price}/kg)</option>
                       {/each}
                     {/if}
@@ -329,6 +340,15 @@
                     >expand_more</span
                   >
                 </div>
+                {#if lots.length > 0}
+                  <a
+                    href="/lots"
+                    class="mt-3 inline-flex items-center gap-2 text-sm font-semibold text-primary hover:underline"
+                  >
+                    <span class="material-symbols-outlined text-base">edit_square</span>
+                    ロットのコード・単価を修正する
+                  </a>
+                {/if}
               </div>
             {:else}
               <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">

@@ -242,16 +242,44 @@ class InventoryService:
         return await InventoryService.get_material(material_id)
 
     @staticmethod
-    async def get_lots_by_material(material_id: int) -> list[Lot]:
-        """材料に紐づくロット一覧"""
+    async def get_lots_by_material(
+        material_id: int,
+        limit: Optional[int] = None,
+        offset: int = 0,
+        search: Optional[str] = None,
+    ) -> tuple[list[Lot], int]:
+        """材料に紐づくロット一覧（件数付き）。limit が None のときは全件。"""
         db = await get_db()
         try:
+            where = "material_id = ?"
+            params: list = [material_id]
+            if search and search.strip():
+                where += " AND lot_code LIKE ?"
+                params.append(f"%{search.strip()}%")
+
             cursor = await db.execute(
-                "SELECT * FROM lots WHERE material_id = ? ORDER BY created_at DESC",
-                (material_id,),
+                f"SELECT COUNT(*) AS c FROM lots WHERE {where}",
+                params,
             )
+            count_row = await cursor.fetchone()
+            total = int(count_row["c"]) if count_row else 0
+
+            if limit is None:
+                cursor = await db.execute(
+                    f"SELECT * FROM lots WHERE {where} ORDER BY datetime(created_at) DESC",
+                    params,
+                )
+            else:
+                cursor = await db.execute(
+                    f"""
+                    SELECT * FROM lots WHERE {where}
+                    ORDER BY datetime(created_at) DESC
+                    LIMIT ? OFFSET ?
+                    """,
+                    params + [limit, offset],
+                )
             rows = await cursor.fetchall()
-            return [Lot(**dict(row)) for row in rows]
+            return [Lot(**dict(row)) for row in rows], total
         finally:
             await db.close()
 
@@ -291,12 +319,19 @@ class InventoryService:
 
     @staticmethod
     async def update_lot(lot_id: int, data: LotUpdate) -> Optional[Lot]:
-        """ロット単価更新"""
+        """ロットコード・単価の更新"""
+        existing = await InventoryService.get_lot(lot_id)
+        if not existing:
+            return None
+
+        next_code = data.lot_code if data.lot_code is not None else existing.lot_code
+        next_price = data.unit_price if data.unit_price is not None else existing.unit_price
+
         db = await get_db()
         try:
             cursor = await db.execute(
-                "UPDATE lots SET unit_price = ? WHERE id = ?",
-                (data.unit_price, lot_id),
+                "UPDATE lots SET lot_code = ?, unit_price = ? WHERE id = ?",
+                (next_code, next_price, lot_id),
             )
             await db.commit()
             if cursor.rowcount == 0:
@@ -475,35 +510,89 @@ class InventoryService:
     async def get_transactions(
         material_id: Optional[int] = None,
         tx_type: Optional[TransactionType] = None,
+        search: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
-    ) -> list[Transaction]:
-        """トランザクション一覧"""
+    ) -> tuple[list[Transaction], int]:
+        """トランザクション一覧（件数付き）。memo・ロットコード・ID の部分一致検索。"""
         db = await get_db()
         try:
-            query = """
-                SELECT transactions.*, lots.lot_code
+            base_from = """
                 FROM transactions
                 LEFT JOIN lots ON lots.id = transactions.lot_id
                 WHERE 1=1
             """
-            params = []
+            params: list = []
 
             if material_id:
-                query += " AND transactions.material_id = ?"
+                base_from += " AND transactions.material_id = ?"
                 params.append(material_id)
             if tx_type:
-                query += " AND transactions.type = ?"
+                base_from += " AND transactions.type = ?"
                 params.append(tx_type.value)
+            if search and search.strip():
+                term = f"%{search.strip()}%"
+                base_from += (
+                    " AND (transactions.memo LIKE ? OR lots.lot_code LIKE ? "
+                    "OR CAST(transactions.id AS TEXT) LIKE ?)"
+                )
+                params.extend([term, term, term])
 
-            query += " ORDER BY transactions.created_at DESC LIMIT ? OFFSET ?"
-            params.extend([limit, offset])
+            count_sql = f"SELECT COUNT(*) AS c {base_from}"
+            cursor = await db.execute(count_sql, params)
+            count_row = await cursor.fetchone()
+            total = int(count_row["c"]) if count_row else 0
 
-            cursor = await db.execute(query, params)
+            data_sql = (
+                f"SELECT transactions.*, lots.lot_code {base_from} "
+                "ORDER BY transactions.created_at DESC LIMIT ? OFFSET ?"
+            )
+            cursor = await db.execute(data_sql, params + [limit, offset])
             rows = await cursor.fetchall()
-            return [Transaction(**dict(row)) for row in rows]
+            items = [Transaction(**dict(row)) for row in rows]
+            return items, total
         finally:
             await db.close()
+
+    @staticmethod
+    async def list_lot_summaries_paginated(
+        material_id: int,
+        limit: int = 20,
+        offset: int = 0,
+        search: Optional[str] = None,
+        nonzero_only: bool = True,
+    ) -> tuple[list[LotInventorySummary], int]:
+        """
+        ロット別在庫サマリーのページング。
+        nonzero_only: True のとき残本数 0 のロットは含めない（ホームのロット一覧向け）。
+        """
+        material = await InventoryService.get_material(material_id)
+        if not material:
+            raise ValueError("Material not found")
+
+        db = await get_db()
+        try:
+            raw = await InventoryService._get_lot_inventory_summaries(db, material_id)
+        finally:
+            await db.close()
+
+        normalized = [
+            InventoryService._normalize_lot_summary_for_display(s, material.weight_per_unit)
+            for s in raw
+        ]
+
+        if nonzero_only:
+            filtered = [s for s in normalized if s.current_quantity > 0]
+        else:
+            filtered = list(normalized)
+
+        if search and search.strip():
+            q = search.strip().lower()
+            filtered = [s for s in filtered if q in s.lot_code.lower()]
+
+        total = len(filtered)
+        page = filtered[offset : offset + limit]
+        return page, total
 
     @staticmethod
     async def update_transaction(
@@ -561,7 +650,11 @@ class InventoryService:
 
         material = materials[0]
         inventory = await InventoryService.calculate_inventory(material.id)
-        recent = await InventoryService.get_transactions(material.id, limit=5)
+        recent, _ = await InventoryService.get_transactions(
+            material_id=material.id,
+            limit=5,
+            offset=0,
+        )
 
         return DashboardStats(
             material=material,

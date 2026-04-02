@@ -152,7 +152,8 @@ async function requestJson(path, options = {}) {
 
 /**
  * @typedef {Object} LotUpdateInput
- * @property {number} unit_price
+ * @property {string} [lot_code]
+ * @property {number} [unit_price]
  */
 
 /**
@@ -172,6 +173,24 @@ async function requestJson(path, options = {}) {
  * @property {LotInventorySummary[]} lot_summaries
  * @property {number | null} oldest_available_lot_id
  * @property {Transaction[]} recent_transactions
+ */
+
+/**
+ * @typedef {Object} PaginatedTransactions
+ * @property {Transaction[]} items
+ * @property {number} total
+ */
+
+/**
+ * @typedef {Object} PaginatedLots
+ * @property {Lot[]} items
+ * @property {number} total
+ */
+
+/**
+ * @typedef {Object} PaginatedLotSummaries
+ * @property {LotInventorySummary[]} items
+ * @property {number} total
  */
 
 /**
@@ -209,12 +228,14 @@ export async function updateMaterial(id, data) {
 }
 
 /**
- * トランザクション一覧取得
+ * トランザクション一覧取得（ページング・検索）
  * @param {Object} [params]
  * @param {number} [params.material_id]
  * @param {string} [params.type]
+ * @param {string} [params.q] メモ・ロットコード・ID の部分一致
  * @param {number} [params.limit]
- * @returns {Promise<Transaction[]>}
+ * @param {number} [params.offset]
+ * @returns {Promise<PaginatedTransactions>}
  */
 export async function fetchTransactions(params = {}) {
   const query = new URLSearchParams();
@@ -222,6 +243,9 @@ export async function fetchTransactions(params = {}) {
     query.set("material_id", String(params.material_id));
   }
   if (params.type) query.set("type", params.type);
+  if (params.q != null && String(params.q).trim() !== "") {
+    query.set("q", String(params.q).trim());
+  }
   if (params.limit !== undefined && params.limit !== null) {
     query.set("limit", String(params.limit));
   }
@@ -277,12 +301,55 @@ export async function deleteTransaction(id) {
 }
 
 /**
- * ロット一覧取得
+ * ロット一覧取得（ページング・検索）
  * @param {number} materialId
- * @returns {Promise<Lot[]>}
+ * @param {Object} [params]
+ * @param {number} [params.limit] 未指定で全件
+ * @param {number} [params.offset]
+ * @param {string} [params.q] ロットコードの部分一致
+ * @returns {Promise<PaginatedLots>}
  */
-export async function fetchLots(materialId) {
-  return requestJson(`/lots/${materialId}`);
+export async function fetchLots(materialId, params = {}) {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined && params.limit !== null) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.offset !== undefined && params.offset !== null) {
+    query.set("offset", String(params.offset));
+  }
+  if (params.q != null && String(params.q).trim() !== "") {
+    query.set("q", String(params.q).trim());
+  }
+  const suffix = query.toString() ? `?${query}` : "";
+  return requestJson(`/lots/${materialId}${suffix}`);
+}
+
+/**
+ * ロット別在庫サマリーのページング（ホームのロット一覧）
+ * @param {number} materialId
+ * @param {Object} [params]
+ * @param {number} [params.limit]
+ * @param {number} [params.offset]
+ * @param {string} [params.q]
+ * @param {boolean} [params.nonzero_only]
+ * @returns {Promise<PaginatedLotSummaries>}
+ */
+export async function fetchLotSummariesPage(materialId, params = {}) {
+  const query = new URLSearchParams();
+  if (params.limit !== undefined && params.limit !== null) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.offset !== undefined && params.offset !== null) {
+    query.set("offset", String(params.offset));
+  }
+  if (params.q != null && String(params.q).trim() !== "") {
+    query.set("q", String(params.q).trim());
+  }
+  if (params.nonzero_only === false) {
+    query.set("nonzero_only", "false");
+  }
+  const suffix = query.toString() ? `?${query}` : "";
+  return requestJson(`/inventory/${materialId}/lot-summaries${suffix}`);
 }
 
 /**
@@ -299,7 +366,7 @@ export async function createLot(data) {
 }
 
 /**
- * ロット単価更新
+ * ロットコード・単価の更新（いずれか一方以上を指定）
  * @param {number} id
  * @param {LotUpdateInput} data
  * @returns {Promise<Lot>}

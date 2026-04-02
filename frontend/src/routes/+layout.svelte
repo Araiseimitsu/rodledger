@@ -20,6 +20,7 @@
     { path: '/', label: 'Home', icon: 'home' },
     { path: '/in', label: 'In', icon: 'south_west' },
     { path: '/out', label: 'Out', icon: 'north_east' },
+    { path: '/lots', label: 'Lots', icon: 'inventory_2' },
     { path: '/history', label: 'History', icon: 'history' },
   ];
 

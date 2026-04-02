@@ -1,35 +1,60 @@
 <script>
   import { fetchTransactions, deleteTransaction } from '$lib/api';
+  import PaginationBar from '$lib/PaginationBar.svelte';
+  import { maxPageIndex, SEARCH_DEBOUNCE_MS } from '$lib/pagination.js';
+
+  const PAGE_SIZE = 25;
 
   let transactions = $state([]);
+  let totalCount = $state(0);
   let loading = $state(true);
   let error = $state('');
   let filterType = $state('');
-  let searchQuery = $state('');
+  let searchInput = $state('');
+  let searchDebounced = $state('');
+  let page = $state(1);
   let deletingId = $state(null);
   let loadVersion = 0;
+
+  $effect(() => {
+    searchInput;
+    const t = setTimeout(() => {
+      searchDebounced = searchInput;
+      page = 1;
+    }, SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  });
 
   async function loadTransactions() {
     const currentVersion = ++loadVersion;
     try {
       loading = true;
       error = '';
-      transactions = await fetchTransactions({
+      const offset = (page - 1) * PAGE_SIZE;
+      const { items, total } = await fetchTransactions({
         type: filterType || undefined,
-        limit: 100,
+        limit: PAGE_SIZE,
+        offset,
+        q: searchDebounced.trim() || undefined,
       });
+      if (currentVersion !== loadVersion) return;
+      transactions = items;
+      totalCount = total;
+      const cap = maxPageIndex(total, PAGE_SIZE);
+      if (page > cap) page = cap;
     } catch (e) {
       if (currentVersion !== loadVersion) return;
       error = e?.message || '履歴の取得に失敗しました';
       console.error(e);
     } finally {
-      if (currentVersion !== loadVersion) return;
-      loading = false;
+      if (currentVersion === loadVersion) loading = false;
     }
   }
 
   $effect(() => {
     filterType;
+    searchDebounced;
+    page;
     loadTransactions();
   });
 
@@ -39,7 +64,7 @@
     deletingId = id;
     try {
       await deleteTransaction(id);
-      transactions = transactions.filter((t) => t.id !== id);
+      await loadTransactions();
     } catch (e) {
       console.error(e);
       alert('削除に失敗しました');
@@ -115,39 +140,36 @@
     return labels[type] || type;
   }
 
-  const filtered = $derived(
-    searchQuery
-      ? transactions.filter((t) => t.memo?.toLowerCase().includes(searchQuery.toLowerCase()))
-      : transactions
-  );
-
-  const groupedTransactions = $derived(groupByDate(filtered));
+  const groupedTransactions = $derived(groupByDate(transactions));
 </script>
 
 <main class="max-w-5xl mx-auto px-8 mt-16 pb-32">
   <!-- Header -->
   <section class="mb-12">
     <h2 class="font-headline text-4xl font-bold tracking-tight text-on-surface mb-2">取引履歴</h2>
-    <p class="font-body text-on-surface-variant max-w-lg">材料の移動履歴と在庫調整の記録。</p>
+    <p class="font-body text-on-surface-variant max-w-lg">材料の移動履歴と在庫調整の記録。メモ・ロットコード・取引IDで検索できます。</p>
   </section>
 
   <!-- Search & Filter -->
-  <section class="mb-10 flex flex-col md:flex-row gap-4 items-center">
-    <div class="relative w-full md:w-96">
+  <section class="mb-6 flex flex-col gap-4">
+    <div class="relative w-full md:max-w-md">
       <span
         class="material-symbols-outlined absolute left-4 top-1/2 -translate-y-1/2 text-on-surface-variant text-sm"
         >search</span
       >
       <input
         type="text"
-        bind:value={searchQuery}
-        placeholder="検索..."
+        bind:value={searchInput}
+        placeholder="メモ・ロットコード・取引IDで検索"
         class="w-full bg-surface-container-low border-none rounded-xl py-3 pl-12 pr-4 focus:ring-1 focus:ring-primary/40 font-body text-sm placeholder:text-outline-variant"
       />
     </div>
-    <div class="flex gap-2 overflow-x-auto w-full md:w-auto pb-2 md:pb-0">
+    <div class="flex gap-2 overflow-x-auto w-full pb-2 md:pb-0">
       <button
-        onclick={() => (filterType = '')}
+        onclick={() => {
+          filterType = '';
+          page = 1;
+        }}
         class="px-4 py-2 rounded-xl font-label text-xs font-semibold whitespace-nowrap transition-colors {!filterType
           ? 'bg-surface-container-highest text-on-secondary-container'
           : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container-highest'}"
@@ -155,7 +177,10 @@
         すべて
       </button>
       <button
-        onclick={() => (filterType = 'in')}
+        onclick={() => {
+          filterType = 'in';
+          page = 1;
+        }}
         class="px-4 py-2 rounded-xl font-label text-xs font-semibold whitespace-nowrap transition-colors {filterType ===
         'in'
           ? 'bg-primary/10 text-primary'
@@ -164,7 +189,10 @@
         入庫
       </button>
       <button
-        onclick={() => (filterType = 'out')}
+        onclick={() => {
+          filterType = 'out';
+          page = 1;
+        }}
         class="px-4 py-2 rounded-xl font-label text-xs font-semibold whitespace-nowrap transition-colors {filterType ===
         'out'
           ? 'bg-error/10 text-error'
@@ -173,7 +201,10 @@
         出庫
       </button>
       <button
-        onclick={() => (filterType = 'return')}
+        onclick={() => {
+          filterType = 'return';
+          page = 1;
+        }}
         class="px-4 py-2 rounded-xl font-label text-xs font-semibold whitespace-nowrap transition-colors {filterType ===
         'return'
           ? 'bg-secondary-container text-on-secondary-container'
@@ -182,6 +213,8 @@
         戻し
       </button>
     </div>
+
+    <PaginationBar bind:page total={totalCount} pageSize={PAGE_SIZE} disabled={loading} />
   </section>
 
   <!-- Transaction List -->
@@ -201,10 +234,10 @@
         再試行
       </button>
     </div>
-  {:else if Object.keys(groupedTransactions).length === 0}
+  {:else if totalCount === 0}
     <div class="text-center py-20 text-on-surface-variant">
       <span class="material-symbols-outlined text-6xl mb-4 opacity-20">history</span>
-      <p class="font-serif italic">履歴がありません</p>
+      <p class="font-serif italic">該当する履歴がありません</p>
     </div>
   {:else}
     <div class="space-y-6">
@@ -230,6 +263,7 @@
                     >{getTypeLabel(tx.type)}</span
                   >
                   <span class="font-body text-xs text-on-surface-variant">{formatTime(tx.created_at)}</span>
+                  <span class="font-mono text-[10px] text-outline-variant">#{tx.id}</span>
                 </div>
                 <p class="font-body text-on-surface">{tx.memo || 'メモなし'}</p>
                 <p class="mt-1 text-xs text-on-surface-variant">{tx.lot_code || 'ロット不明'}</p>

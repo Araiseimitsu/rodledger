@@ -32,9 +32,7 @@
   let idempotencyKey = $state('');
 
   const lotSummaries = $derived(dashboard?.lot_summaries ?? []);
-  const availableLotSummaries = $derived(
-    lotSummaries.filter((lot) => lot.current_quantity > 0 || lot.current_weight > 0)
-  );
+  const availableLotSummaries = $derived(lotSummaries.filter((lot) => lot.current_quantity > 0));
   const selectableLots = $derived(
     mode === 'out'
       ? lots
@@ -115,7 +113,8 @@
 
     try {
       dashboard = await fetchDashboard();
-      lots = await fetchLots(dashboard.material.id);
+      const { items } = await fetchLots(dashboard.material.id);
+      lots = items;
       syncSelectedLotId();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';

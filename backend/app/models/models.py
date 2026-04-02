@@ -5,7 +5,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Optional
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class TransactionType(str, Enum):
@@ -54,7 +54,28 @@ class LotCreate(LotBase):
 
 
 class LotUpdate(BaseModel):
-    unit_price: float = Field(gt=0, description="円/kg")
+    """ロットのロットコード・単価の更新（いずれか一方以上を指定）"""
+
+    lot_code: Optional[str] = None
+    unit_price: Optional[float] = Field(default=None, gt=0, description="円/kg")
+
+    @field_validator("lot_code", mode="before")
+    @classmethod
+    def normalize_lot_code(cls, v):
+        if v is None:
+            return None
+        if not isinstance(v, str):
+            raise ValueError("lot_code は文字列で指定してください")
+        stripped = v.strip()
+        if not stripped:
+            raise ValueError("ロットコードを空にすることはできません")
+        return stripped
+
+    @model_validator(mode="after")
+    def require_at_least_one(self):
+        if self.lot_code is None and self.unit_price is None:
+            raise ValueError("lot_code または unit_price のいずれかを指定してください")
+        return self
 
 
 class Lot(LotBase):
@@ -137,3 +158,21 @@ class DashboardStats(BaseModel):
     lot_summaries: list[LotInventorySummary] = Field(default_factory=list)
     oldest_available_lot_id: Optional[int] = None
     recent_transactions: list[Transaction]
+
+
+class PaginatedTransactions(BaseModel):
+    """ページング付きトランザクション一覧"""
+    items: list[Transaction]
+    total: int
+
+
+class PaginatedLots(BaseModel):
+    """ページング付きロット一覧"""
+    items: list[Lot]
+    total: int
+
+
+class PaginatedLotSummaries(BaseModel):
+    """ページング付きロット別在庫サマリー"""
+    items: list[LotInventorySummary]
+    total: int
