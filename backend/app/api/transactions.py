@@ -113,7 +113,10 @@ async def update_lot(lot_id: int, data: LotUpdate):
     try:
         lot = await InventoryService.update_lot(lot_id, data)
     except sqlite3.IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Lot code already exists") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="この材料では、すでに同じロットコードが使われています",
+        ) from exc
     if not lot:
         raise HTTPException(status_code=404, detail="Lot not found")
     return lot
@@ -129,7 +132,10 @@ async def create_lot(data: LotCreate):
     try:
         return await InventoryService.create_lot(data)
     except sqlite3.IntegrityError as exc:
-        raise HTTPException(status_code=409, detail="Lot code already exists") from exc
+        raise HTTPException(
+            status_code=409,
+            detail="この材料では、すでに同じロットコードが使われています",
+        ) from exc
 
 
 @router.get("/inventory/{material_id}/lot-summaries", response_model=PaginatedLotSummaries)

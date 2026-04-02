@@ -39,15 +39,16 @@ async def init_db():
             )
         """)
 
-        # lots テーブル
+        # lots テーブル（材料ごとにロットコードは一意）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS lots (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 material_id INTEGER NOT NULL,
-                lot_code TEXT NOT NULL UNIQUE,
+                lot_code TEXT NOT NULL,
                 unit_price REAL NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
-                FOREIGN KEY (material_id) REFERENCES materials(id)
+                FOREIGN KEY (material_id) REFERENCES materials(id),
+                UNIQUE (material_id, lot_code)
             )
         """)
 
@@ -89,6 +90,7 @@ async def init_db():
         await _ensure_all_shelf_numbers_seeded(db)
         await _migrate_legacy_transactions_table(db)
         await _migrate_stock_locations_legacy_names(db)
+        await _migrate_lots_unique_per_material(db)
 
         await db.commit()
 
@@ -256,6 +258,59 @@ async def _migrate_stock_locations_legacy_names(db: aiosqlite.Connection):
             """,
             (unset_id,),
         )
+
+
+def _should_migrate_lots_to_material_scoped_lot_code(table_sql: str | None) -> bool:
+    """CREATE TABLE lots が旧スキーマ（lot_code 単独 UNIQUE）かどうか。"""
+    if not table_sql:
+        return False
+    compact = table_sql.replace(" ", "").replace("\n", "").lower()
+    if "unique(material_id,lot_code)" in compact:
+        return False
+    return "lot_codetextnotnullunique" in compact
+
+
+async def _migrate_lots_unique_per_material(db: aiosqlite.Connection) -> None:
+    """
+    lots.lot_code のグローバル UNIQUE を廃止し、材料単位の UNIQUE(material_id, lot_code) に変更する。
+    """
+    cursor = await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='lots'"
+    )
+    row = await cursor.fetchone()
+    if not row or not _should_migrate_lots_to_material_scoped_lot_code(row["sql"]):
+        return
+
+    await db.execute("PRAGMA foreign_keys = OFF")
+    try:
+        await db.execute(
+            """
+            CREATE TABLE lots_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                material_id INTEGER NOT NULL,
+                lot_code TEXT NOT NULL,
+                unit_price REAL NOT NULL,
+                created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+                FOREIGN KEY (material_id) REFERENCES materials(id),
+                UNIQUE (material_id, lot_code)
+            )
+            """
+        )
+        await db.execute("INSERT INTO lots_new SELECT * FROM lots")
+        await db.execute("DROP TABLE lots")
+        await db.execute("ALTER TABLE lots_new RENAME TO lots")
+
+        cursor = await db.execute("SELECT MAX(id) AS m FROM lots")
+        max_row = await cursor.fetchone()
+        max_id = max_row["m"] if max_row and max_row["m"] is not None else 0
+        if max_id > 0:
+            await db.execute("DELETE FROM sqlite_sequence WHERE name = 'lots'")
+            await db.execute(
+                "INSERT INTO sqlite_sequence (name, seq) VALUES ('lots', ?)",
+                (max_id,),
+            )
+    finally:
+        await db.execute("PRAGMA foreign_keys = ON")
 
 
 async def _get_default_stock_location_id(db: aiosqlite.Connection) -> int:

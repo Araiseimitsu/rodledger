@@ -40,6 +40,26 @@ class InventoryService:
     _OUTBOUND_WEIGHT_TOLERANCE_KG = 0.001
 
     @staticmethod
+    def _unit_prices_equal(a: float, b: float) -> bool:
+        return math.isclose(a, b, rel_tol=1e-9, abs_tol=1e-9)
+
+    @staticmethod
+    async def _merge_create_with_existing_lot(
+        existing: Lot, requested_unit_price: float
+    ) -> Lot:
+        """POST /lots で同一材料・同一コードが既にある場合の単価マージ"""
+        if InventoryService._unit_prices_equal(
+            existing.unit_price, requested_unit_price
+        ):
+            return existing
+        updated = await InventoryService.update_lot(
+            existing.id, LotUpdate(unit_price=requested_unit_price)
+        )
+        if updated is not None:
+            return updated
+        return existing
+
+    @staticmethod
     async def _get_default_location_id() -> int:
         """既定の保管場所 ID（棚番1）"""
         db = await get_db()
@@ -545,8 +565,38 @@ class InventoryService:
             await db.close()
 
     @staticmethod
+    async def get_lot_by_material_and_code(
+        material_id: int, lot_code: str
+    ) -> Optional[Lot]:
+        """材料 ID とロットコードで検索（同一材料内の一意キー）"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM lots WHERE material_id = ? AND lot_code = ?",
+                (material_id, lot_code),
+            )
+            row = await cursor.fetchone()
+            if row:
+                return Lot(**dict(row))
+            return None
+        finally:
+            await db.close()
+
+    @staticmethod
     async def create_lot(data: LotCreate) -> Lot:
-        """ロット作成"""
+        """
+        ロット作成。
+        同一材料・同一ロットコードが既にあれば新規行は作らず、既存ロットを返す（入庫の「既存ロット」と同じ扱い）。
+        単価だけ異なる場合は既存ロットの単価を更新する。
+        """
+        existing = await InventoryService.get_lot_by_material_and_code(
+            data.material_id, data.lot_code
+        )
+        if existing is not None:
+            return await InventoryService._merge_create_with_existing_lot(
+                existing, data.unit_price
+            )
+
         db = await get_db()
         try:
             cursor = await db.execute(
@@ -558,6 +608,15 @@ class InventoryService:
             )
             await db.commit()
             lot_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            retry = await InventoryService.get_lot_by_material_and_code(
+                data.material_id, data.lot_code
+            )
+            if retry is not None:
+                return await InventoryService._merge_create_with_existing_lot(
+                    retry, data.unit_price
+                )
+            raise
         finally:
             await db.close()
 
@@ -572,6 +631,12 @@ class InventoryService:
 
         next_code = data.lot_code if data.lot_code is not None else existing.lot_code
         next_price = data.unit_price if data.unit_price is not None else existing.unit_price
+
+        if (
+            next_code == existing.lot_code
+            and InventoryService._unit_prices_equal(next_price, existing.unit_price)
+        ):
+            return existing
 
         db = await get_db()
         try:
