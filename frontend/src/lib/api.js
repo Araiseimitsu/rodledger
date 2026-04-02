@@ -103,7 +103,7 @@ async function requestJson(path, options = {}) {
  * @property {number} id
  * @property {number} material_id
  * @property {number} lot_id
- * @property {'in'|'out'|'return'|'adjust'} type
+ * @property {'in'|'out'|'return'|'adjust'|'transfer'} type
  * @property {number} quantity
  * @property {number} weight
  * @property {number} unit_price
@@ -111,6 +111,34 @@ async function requestJson(path, options = {}) {
  * @property {string} [memo]
  * @property {string} [idempotency_key]
  * @property {string} [lot_code]
+ * @property {number} [location_id]
+ * @property {string} [location_name]
+ * @property {number} [location_from_id]
+ * @property {number} [location_to_id]
+ * @property {string} [location_from_name]
+ * @property {string} [location_to_name]
+ */
+
+/**
+ * @typedef {Object} StockLocation
+ * @property {number} id
+ * @property {string} name 棚番（1〜299、文字列で保持）
+ * @property {number} sort_order
+ * @property {string} created_at
+ */
+
+/**
+ * @typedef {Object} LotLocationStock
+ * @property {number} location_id
+ * @property {string} location_name
+ * @property {number} current_quantity
+ * @property {number} current_weight
+ */
+
+/**
+ * @typedef {Object} LotLocationStocksResponse
+ * @property {number} lot_id
+ * @property {LotLocationStock[]} items
  */
 
 /**
@@ -197,13 +225,33 @@ async function requestJson(path, options = {}) {
  * @typedef {Object} TransactionCreateInput
  * @property {number} material_id
  * @property {number} lot_id
- * @property {'in'|'out'|'return'|'adjust'} type
+ * @property {'in'|'out'|'return'|'adjust'|'transfer'} type
  * @property {number} quantity
  * @property {number} weight
  * @property {number} [unit_price]
  * @property {string} [memo]
  * @property {string} [idempotency_key]
+ * @property {number} [location_id]
+ * @property {number} [location_from_id]
+ * @property {number} [location_to_id]
  */
+
+/**
+ * 保管場所一覧
+ * @returns {Promise<StockLocation[]>}
+ */
+export async function fetchStockLocations() {
+  return requestJson("/stock-locations");
+}
+
+/**
+ * ロットの場所別在庫
+ * @param {number} lotId
+ * @returns {Promise<LotLocationStocksResponse>}
+ */
+export async function fetchLotLocationStocks(lotId) {
+  return requestJson(`/inventory/lots/${lotId}/location-stocks`);
+}
 
 /**
  * ダッシュボード統計取得

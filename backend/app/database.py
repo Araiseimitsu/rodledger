@@ -4,6 +4,8 @@
 import aiosqlite
 from pathlib import Path
 
+from app.models.models import SHELF_NUMBER_MAX, SHELF_NUMBER_MIN
+
 DATABASE_PATH = Path(__file__).parent.parent / "data" / "rodledger.db"
 SQLITE_TIMEOUT_SECONDS = 30
 SQLITE_BUSY_TIMEOUT_MS = 30000
@@ -49,25 +51,44 @@ async def init_db():
             )
         """)
 
-        # transactions テーブル
+        # 保管場所マスタ（transactions より先に作成）
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS stock_locations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime'))
+            )
+        """)
+
+        # transactions テーブル（新規 DB 用。既存レガシーは _migrate_legacy_transactions_table で置換）
         await db.execute("""
             CREATE TABLE IF NOT EXISTS transactions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 material_id INTEGER NOT NULL,
                 lot_id INTEGER NOT NULL,
-                type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust')),
+                type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer')),
                 quantity INTEGER NOT NULL,
                 weight REAL NOT NULL,
                 unit_price REAL NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
                 memo TEXT,
                 idempotency_key TEXT,
+                location_id INTEGER,
+                location_from_id INTEGER,
+                location_to_id INTEGER,
                 FOREIGN KEY (material_id) REFERENCES materials(id),
-                FOREIGN KEY (lot_id) REFERENCES lots(id)
+                FOREIGN KEY (lot_id) REFERENCES lots(id),
+                FOREIGN KEY (location_id) REFERENCES stock_locations(id),
+                FOREIGN KEY (location_from_id) REFERENCES stock_locations(id),
+                FOREIGN KEY (location_to_id) REFERENCES stock_locations(id)
             )
         """)
 
         await _ensure_transaction_idempotency_key(db)
+        await _ensure_all_shelf_numbers_seeded(db)
+        await _migrate_legacy_transactions_table(db)
+        await _migrate_stock_locations_legacy_names(db)
 
         await db.commit()
 
@@ -115,13 +136,23 @@ async def _seed_demo_data(db: aiosqlite.Connection):
     await db.commit()
     lot_id = cursor.lastrowid
 
+    cursor = await db.execute(
+        "SELECT id FROM stock_locations WHERE name = ?", ("1",)
+    )
+    loc_row = await cursor.fetchone()
+    if not loc_row:
+        raise RuntimeError("棚番1の stock_locations が見つかりません")
+    default_location_id = int(loc_row["id"])
+
     # デモ用トランザクション（初期在庫）
     await db.execute(
         """
-        INSERT INTO transactions (material_id, lot_id, type, quantity, weight, unit_price, memo)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO transactions (
+            material_id, lot_id, type, quantity, weight, unit_price, memo, location_id
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (material_id, lot_id, "in", 100, 99.3, 275.0, "初期在庫"),
+        (material_id, lot_id, "in", 100, 99.3, 275.0, "初期在庫", default_location_id),
     )
 
     await db.commit()
@@ -171,6 +202,149 @@ async def _ensure_transaction_idempotency_key(db: aiosqlite.Connection):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency_key ON transactions(idempotency_key)"
     )
+
+
+async def _ensure_all_shelf_numbers_seeded(db: aiosqlite.Connection):
+    """
+    棚番 SHELF_NUMBER_MIN〜SHELF_NUMBER_MAX をすべて登録する（既存は INSERT OR IGNORE でスキップ）。
+    置き場は常に全棚分存在する前提。
+    """
+    rows = [
+        (str(n), n) for n in range(SHELF_NUMBER_MIN, SHELF_NUMBER_MAX + 1)
+    ]
+    await db.executemany(
+        """
+        INSERT OR IGNORE INTO stock_locations (name, sort_order)
+        VALUES (?, ?)
+        """,
+        rows,
+    )
+
+
+async def _migrate_stock_locations_legacy_names(db: aiosqlite.Connection):
+    """
+    旧データの「未設定」を棚番1へ寄せる。
+    既に棚番1がある場合は参照を統合して重複行を削除する。
+    """
+    cursor = await db.execute(
+        "SELECT id FROM stock_locations WHERE name = ?", ("未設定",)
+    )
+    unset_row = await cursor.fetchone()
+    if not unset_row:
+        return
+    unset_id = int(unset_row["id"])
+
+    cursor = await db.execute(
+        "SELECT id FROM stock_locations WHERE name = ?", ("1",)
+    )
+    one_row = await cursor.fetchone()
+
+    if one_row and int(one_row["id"]) != unset_id:
+        one_id = int(one_row["id"])
+        for col in ("location_id", "location_from_id", "location_to_id"):
+            await db.execute(
+                f"UPDATE transactions SET {col} = ? WHERE {col} = ?",
+                (one_id, unset_id),
+            )
+        await db.execute("DELETE FROM stock_locations WHERE id = ?", (unset_id,))
+    else:
+        await db.execute(
+            """
+            UPDATE stock_locations
+            SET name = '1', sort_order = 1
+            WHERE id = ?
+            """,
+            (unset_id,),
+        )
+
+
+async def _get_default_stock_location_id(db: aiosqlite.Connection) -> int:
+    await _ensure_all_shelf_numbers_seeded(db)
+    cursor = await db.execute(
+        "SELECT id FROM stock_locations WHERE name = ?", ("1",)
+    )
+    row = await cursor.fetchone()
+    if not row:
+        raise RuntimeError("棚番1の stock_locations が見つかりません")
+    return int(row["id"])
+
+
+async def _migrate_legacy_transactions_table(db: aiosqlite.Connection):
+    """
+    旧スキーマの transactions（location 列なし）を新スキーマへ移行する。
+    新規作成済みの場合は何もしない。
+    """
+    cursor = await db.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='transactions'"
+    )
+    if not await cursor.fetchone():
+        return
+
+    cursor = await db.execute("PRAGMA table_info(transactions)")
+    columns = {col["name"] for col in await cursor.fetchall()}
+    if "location_id" in columns:
+        return
+
+    await _ensure_all_shelf_numbers_seeded(db)
+    default_location_id = await _get_default_stock_location_id(db)
+
+    await db.execute(
+        """
+        CREATE TABLE transactions_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            material_id INTEGER NOT NULL,
+            lot_id INTEGER NOT NULL,
+            type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer')),
+            quantity INTEGER NOT NULL,
+            weight REAL NOT NULL,
+            unit_price REAL NOT NULL,
+            created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
+            memo TEXT,
+            idempotency_key TEXT,
+            location_id INTEGER,
+            location_from_id INTEGER,
+            location_to_id INTEGER,
+            FOREIGN KEY (material_id) REFERENCES materials(id),
+            FOREIGN KEY (lot_id) REFERENCES lots(id),
+            FOREIGN KEY (location_id) REFERENCES stock_locations(id),
+            FOREIGN KEY (location_from_id) REFERENCES stock_locations(id),
+            FOREIGN KEY (location_to_id) REFERENCES stock_locations(id)
+        )
+        """
+    )
+
+    await db.execute(
+        f"""
+        INSERT INTO transactions_new (
+            id, material_id, lot_id, type, quantity, weight, unit_price,
+            created_at, memo, idempotency_key, location_id, location_from_id, location_to_id
+        )
+        SELECT
+            id, material_id, lot_id, type, quantity, weight, unit_price,
+            created_at, memo, idempotency_key,
+            {default_location_id}, NULL, NULL
+        FROM transactions
+        """
+    )
+
+    await db.execute("DROP TABLE transactions")
+    await db.execute("ALTER TABLE transactions_new RENAME TO transactions")
+
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency_key ON transactions(idempotency_key)"
+    )
+
+    cursor = await db.execute("SELECT MAX(id) AS m FROM transactions")
+    max_row = await cursor.fetchone()
+    max_id = max_row["m"] if max_row and max_row["m"] is not None else 0
+    if max_id > 0:
+        await db.execute(
+            "DELETE FROM sqlite_sequence WHERE name = 'transactions'"
+        )
+        await db.execute(
+            "INSERT INTO sqlite_sequence (name, seq) VALUES ('transactions', ?)",
+            (max_id,),
+        )
 
 
 async def _reconcile_negative_inventory(db: aiosqlite.Connection):

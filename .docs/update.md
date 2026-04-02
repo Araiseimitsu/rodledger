@@ -1,5 +1,13 @@
 ## 2026-04-02
 
+- 入庫画面: 既存ロットを選んだときは、場所別在庫 API に基づき在庫のある棚を入庫先の初期候補に設定（別棚への入庫はプルダウンで変更可能）。
+- 出庫画面: 同一ロットが複数棚に分かれて置かれる前提で、出庫元は「場所別在庫 API」に在庫のある棚のみを表示し、棚ごとの本数・重量を表示。戻し先は従来どおり全棚から選択。
+- 保管場所（棚番固定）のため、閲覧専用だった保管場所マスタ画面 `/locations` とナビ「Loc」を削除した。`GET /api/stock-locations` と入出庫・移動画面のプルダウンは従来どおり。
+- 保管場所（stock location）を追加。マスタ `stock_locations`、取引に `location_id` / 移動用 `location_from_id`・`location_to_id`、種別 `transfer`（場所間移動・ロット総量は不変）を導入。既存 DB は起動時マイグレーションで既定場所「未設定」に紐づける。
+- API: GET/POST `/api/stock-locations`、GET `/api/inventory/lots/{lot_id}/location-stocks`、入出庫・戻しは `location_id`（省略時は既定場所）。フロントは入庫・出庫・移動画面と履歴表示を対応。
+- 保管場所マスタ画面 `/locations`（ナビ「Loc」）と PUT/DELETE `/api/stock-locations/{id}` を追加。
+- 置き場（保管場所）は棚番 **1〜299** の整数のみとし、API・画面で検証。旧「未設定」はマイグレーションで棚番1に寄せる。
+- 起動時に `stock_locations` へ棚番1〜299を **INSERT OR IGNORE で全件** 登録。マスタ追加・削除・棚番変更は不可（表示順のみ PUT 可）。保管場所マスタ画面は閲覧用。
 - トランザクション一覧 GET `/api/transactions` を `items` + `total` のページング形式に変更し、クエリ `q` でメモ・ロットコード・取引 ID の部分一致検索に対応した。
 - ロット一覧 GET `/api/lots/{material_id}` を同様にページング化（`limit` 省略時は全件）。クエリ `q` でロットコード部分一致。
 - GET `/api/inventory/{material_id}/lot-summaries` を追加（残在庫ロットのページング・ロットコード検索。`nonzero_only` で残本 0 を除外可能）。

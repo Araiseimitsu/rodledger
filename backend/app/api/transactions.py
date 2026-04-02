@@ -12,6 +12,9 @@ from app.models.models import (
     Lot,
     LotCreate,
     LotUpdate,
+    StockLocation,
+    StockLocationCreate,
+    StockLocationUpdate,
     Transaction,
     TransactionCreate,
     TransactionType,
@@ -20,10 +23,73 @@ from app.models.models import (
     PaginatedTransactions,
     PaginatedLots,
     PaginatedLotSummaries,
+    LotLocationStocksResponse,
 )
-from app.services.inventory_service import InventoryService, InsufficientInventoryError
+from app.services.inventory_service import (
+    InventoryService,
+    InsufficientInventoryError,
+    InsufficientLocationInventoryError,
+)
 
 router = APIRouter(prefix="/api", tags=["transactions"])
+
+
+@router.get("/stock-locations", response_model=list[StockLocation])
+async def list_stock_locations():
+    """保管場所マスタ一覧"""
+    return await InventoryService.list_stock_locations()
+
+
+@router.post("/stock-locations", response_model=StockLocation, status_code=201)
+async def create_stock_location(data: StockLocationCreate):
+    """保管場所を追加（棚番1〜299は起動時に全件登録済みのため通常は不可）"""
+    try:
+        return await InventoryService.create_stock_location(data)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="同じ名前の保管場所が既に存在します",
+        ) from exc
+
+
+@router.put("/stock-locations/{location_id}", response_model=StockLocation)
+async def update_stock_location(location_id: int, data: StockLocationUpdate):
+    """保管場所の表示順を更新（棚番の変更は不可）"""
+    try:
+        loc = await InventoryService.update_stock_location(location_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except sqlite3.IntegrityError as exc:
+        raise HTTPException(
+            status_code=409,
+            detail="同じ名前の保管場所が既に存在します",
+        ) from exc
+    if not loc:
+        raise HTTPException(status_code=404, detail="Stock location not found")
+    return loc
+
+
+@router.delete("/stock-locations/{location_id}", status_code=204)
+async def delete_stock_location(location_id: int):
+    """保管場所を削除（棚番マスタは固定のため不可）"""
+    try:
+        deleted = await InventoryService.delete_stock_location(location_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Stock location not found")
+
+
+@router.get("/inventory/lots/{lot_id}/location-stocks", response_model=LotLocationStocksResponse)
+async def get_lot_location_stocks(lot_id: int):
+    """ロットの場所別在庫"""
+    lot = await InventoryService.get_lot(lot_id)
+    if not lot:
+        raise HTTPException(status_code=404, detail="Lot not found")
+    items = await InventoryService.get_lot_location_stocks(lot_id)
+    return LotLocationStocksResponse(lot_id=lot_id, items=items)
 
 
 @router.get("/dashboard", response_model=DashboardStats)
@@ -133,6 +199,8 @@ async def create_transaction(data: TransactionCreate):
     try:
         return await InventoryService.create_transaction(data)
     except InsufficientInventoryError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except InsufficientLocationInventoryError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
 
 

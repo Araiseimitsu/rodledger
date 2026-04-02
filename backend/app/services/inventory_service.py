@@ -13,6 +13,10 @@ from app.models.models import (
     LotCreate,
     LotUpdate,
     LotInventorySummary,
+    LotLocationStock,
+    StockLocation,
+    StockLocationCreate,
+    StockLocationUpdate,
     Transaction,
     TransactionCreate,
     TransactionType,
@@ -25,11 +29,253 @@ class InsufficientInventoryError(Exception):
     """在庫不足を表す例外"""
 
 
+class InsufficientLocationInventoryError(Exception):
+    """指定場所の在庫不足を表す例外"""
+
+
 class InventoryService:
     """在庫計算ロジック"""
 
     # 重量は 0.001kg 単位で表示・積み上げるため、本数×単重の換算値が残重量をわずかに超えることがある
     _OUTBOUND_WEIGHT_TOLERANCE_KG = 0.001
+
+    @staticmethod
+    async def _get_default_location_id() -> int:
+        """既定の保管場所 ID（棚番1）"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT id FROM stock_locations WHERE name = ?", ("1",)
+            )
+            row = await cursor.fetchone()
+            if not row:
+                raise RuntimeError("棚番1の stock_locations が見つかりません")
+            return int(row["id"])
+        finally:
+            await db.close()
+
+    @staticmethod
+    async def list_stock_locations() -> list[StockLocation]:
+        """保管場所一覧（表示順）"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                """
+                SELECT * FROM stock_locations
+                ORDER BY sort_order ASC, id ASC
+                """
+            )
+            rows = await cursor.fetchall()
+            return [StockLocation(**dict(row)) for row in rows]
+        finally:
+            await db.close()
+
+    @staticmethod
+    async def create_stock_location(data: StockLocationCreate) -> StockLocation:
+        """保管場所を追加（棚番1〜299は起動時に全件登録済みのため不可）"""
+        raise ValueError(
+            "棚番1〜299はデータベース起動時にすべて登録済みです。新規追加は不要です。"
+        )
+
+    @staticmethod
+    async def update_stock_location(
+        location_id: int, data: StockLocationUpdate
+    ) -> Optional[StockLocation]:
+        """表示順のみ更新可（棚番の変更は不可）"""
+        existing = await InventoryService.get_stock_location(location_id)
+        if not existing:
+            return None
+
+        if data.name is not None and data.name != existing.name:
+            raise ValueError(
+                "棚番の変更はできません。一覧の並び替えが必要な場合のみ表示順を更新してください。"
+            )
+
+        next_order = (
+            data.sort_order if data.sort_order is not None else existing.sort_order
+        )
+
+        db = await get_db()
+        try:
+            await db.execute(
+                """
+                UPDATE stock_locations
+                SET sort_order = ?
+                WHERE id = ?
+                """,
+                (next_order, location_id),
+            )
+            await db.commit()
+        finally:
+            await db.close()
+
+        return await InventoryService.get_stock_location(location_id)
+
+    @staticmethod
+    async def count_transactions_referencing_location(location_id: int) -> int:
+        """取引がこの保管場所を参照している件数"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                """
+                SELECT COUNT(*) AS c FROM transactions
+                WHERE location_id = ?
+                   OR location_from_id = ?
+                   OR location_to_id = ?
+                """,
+                (location_id, location_id, location_id),
+            )
+            row = await cursor.fetchone()
+            return int(row["c"]) if row else 0
+        finally:
+            await db.close()
+
+    @staticmethod
+    async def delete_stock_location(location_id: int) -> bool:
+        """保管場所を削除（棚番1〜299はマスタ固定のため不可）"""
+        raise ValueError("棚番1〜299はマスタ固定のため削除できません")
+
+    @staticmethod
+    async def get_stock_location(location_id: int) -> Optional[StockLocation]:
+        """保管場所を1件取得"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                "SELECT * FROM stock_locations WHERE id = ?", (location_id,)
+            )
+            row = await cursor.fetchone()
+            if row:
+                return StockLocation(**dict(row))
+            return None
+        finally:
+            await db.close()
+
+    @staticmethod
+    async def get_lot_location_stocks(lot_id: int) -> list[LotLocationStock]:
+        """ロットの場所別残（履歴から集計）"""
+        db = await get_db()
+        try:
+            cursor = await db.execute(
+                """
+                SELECT
+                    sl.id AS location_id,
+                    sl.name AS location_name,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN t.type IN ('in', 'return', 'adjust')
+                                AND t.location_id = sl.id
+                                THEN t.quantity
+                            WHEN t.type = 'out' AND t.location_id = sl.id
+                                THEN -t.quantity
+                            WHEN t.type = 'transfer' AND t.location_from_id = sl.id
+                                THEN -t.quantity
+                            WHEN t.type = 'transfer' AND t.location_to_id = sl.id
+                                THEN t.quantity
+                            ELSE 0
+                        END
+                    ), 0) AS current_quantity,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN t.type IN ('in', 'return', 'adjust')
+                                AND t.location_id = sl.id
+                                THEN t.weight
+                            WHEN t.type = 'out' AND t.location_id = sl.id
+                                THEN -t.weight
+                            WHEN t.type = 'transfer' AND t.location_from_id = sl.id
+                                THEN -t.weight
+                            WHEN t.type = 'transfer' AND t.location_to_id = sl.id
+                                THEN t.weight
+                            ELSE 0
+                        END
+                    ), 0) AS current_weight
+                FROM stock_locations sl
+                LEFT JOIN transactions t
+                    ON t.lot_id = ?
+                    AND (
+                        (t.type IN ('in', 'return', 'adjust', 'out') AND t.location_id = sl.id)
+                        OR (
+                            t.type = 'transfer'
+                            AND (t.location_from_id = sl.id OR t.location_to_id = sl.id)
+                        )
+                    )
+                GROUP BY sl.id, sl.name
+                HAVING current_quantity != 0 OR current_weight != 0
+                ORDER BY sl.sort_order ASC, sl.id ASC
+                """,
+                (lot_id,),
+            )
+            rows = await cursor.fetchall()
+            return [
+                LotLocationStock(
+                    location_id=row["location_id"],
+                    location_name=row["location_name"],
+                    current_quantity=int(row["current_quantity"] or 0),
+                    current_weight=InventoryService._normalize_zero(
+                        float(row["current_weight"] or 0.0), 3
+                    ),
+                )
+                for row in rows
+            ]
+        finally:
+            await db.close()
+
+    @staticmethod
+    async def _get_lot_location_balance(
+        db,
+        lot_id: int,
+        location_id: int,
+    ) -> tuple[int, float]:
+        """ロット×場所の残本数・残重量"""
+        cursor = await db.execute(
+            """
+            SELECT
+                COALESCE(SUM(
+                    CASE
+                        WHEN type IN ('in', 'return', 'adjust') AND transactions.location_id = ?
+                            THEN quantity
+                        WHEN type = 'out' AND transactions.location_id = ?
+                            THEN -quantity
+                        WHEN type = 'transfer' AND transactions.location_from_id = ?
+                            THEN -quantity
+                        WHEN type = 'transfer' AND transactions.location_to_id = ?
+                            THEN quantity
+                        ELSE 0
+                    END
+                ), 0) AS q,
+                COALESCE(SUM(
+                    CASE
+                        WHEN type IN ('in', 'return', 'adjust') AND transactions.location_id = ?
+                            THEN weight
+                        WHEN type = 'out' AND transactions.location_id = ?
+                            THEN -weight
+                        WHEN type = 'transfer' AND transactions.location_from_id = ?
+                            THEN -weight
+                        WHEN type = 'transfer' AND transactions.location_to_id = ?
+                            THEN weight
+                        ELSE 0
+                    END
+                ), 0) AS w
+            FROM transactions
+            WHERE lot_id = ?
+            """,
+            (
+                location_id,
+                location_id,
+                location_id,
+                location_id,
+                location_id,
+                location_id,
+                location_id,
+                location_id,
+                lot_id,
+            ),
+        )
+        row = await cursor.fetchone()
+        if not row:
+            return 0, 0.0
+        qty = int(row["q"] or 0)
+        w = InventoryService._normalize_zero(float(row["w"] or 0.0), 3)
+        return qty, w
 
     @staticmethod
     def _normalize_zero(value: float, digits: int = 3) -> float:
@@ -392,6 +638,84 @@ class InventoryService:
                 if existing:
                     return existing
 
+            if data.type == TransactionType.TRANSFER:
+                lot = await InventoryService.get_lot(data.lot_id)
+                if not lot or lot.material_id != data.material_id:
+                    raise InsufficientInventoryError("移動対象のロットが見つかりません")
+
+                loc_from = await InventoryService.get_stock_location(data.location_from_id)
+                loc_to = await InventoryService.get_stock_location(data.location_to_id)
+                if not loc_from or not loc_to:
+                    raise InsufficientInventoryError("保管場所が見つかりません")
+
+                src_qty, src_weight = await InventoryService._get_lot_location_balance(
+                    db, data.lot_id, data.location_from_id
+                )
+                material = await InventoryService.get_material(data.material_id)
+                if not material:
+                    raise InsufficientInventoryError("材料が見つかりません")
+
+                effective_src = InventoryService._effective_stock_quantity(
+                    src_qty,
+                    src_weight,
+                    material.weight_per_unit,
+                )
+                if data.quantity > effective_src or not InventoryService._outbound_weight_within_stock(
+                    data.weight, src_weight
+                ):
+                    raise InsufficientLocationInventoryError(
+                        "移動元の場所に十分な在庫がありません"
+                    )
+
+                insert_quantity = data.quantity
+                insert_weight = data.weight
+                insert_quantity = min(insert_quantity, src_qty)
+                insert_weight = min(
+                    InventoryService._normalize_zero(max(0.0, insert_weight), 3),
+                    InventoryService._normalize_zero(src_weight, 3),
+                )
+
+                try:
+                    cursor = await db.execute(
+                        """
+                        INSERT INTO transactions
+                        (material_id, lot_id, type, quantity, weight, unit_price, memo,
+                         idempotency_key, location_id, location_from_id, location_to_id)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)
+                        """,
+                        (
+                            data.material_id,
+                            data.lot_id,
+                            data.type.value,
+                            insert_quantity,
+                            insert_weight,
+                            data.unit_price,
+                            data.memo,
+                            data.idempotency_key,
+                            data.location_from_id,
+                            data.location_to_id,
+                        ),
+                    )
+                    await db.commit()
+                    tx_id = cursor.lastrowid
+                except sqlite3.IntegrityError:
+                    if data.idempotency_key:
+                        existing = await InventoryService.get_transaction_by_idempotency_key(
+                            data.idempotency_key
+                        )
+                        if existing:
+                            return existing
+                    raise
+
+                return await InventoryService.get_transaction(tx_id)
+
+            default_location_id = await InventoryService._get_default_location_id()
+            resolved_location_id = data.location_id or default_location_id
+            location = await InventoryService.get_stock_location(resolved_location_id)
+            if not location:
+                raise InsufficientInventoryError("保管場所が見つかりません")
+
+            selected_lot = None
             if data.type == TransactionType.OUT:
                 inventory = await InventoryService.calculate_inventory(data.material_id)
                 if data.quantity > inventory.total_effective_quantity or not InventoryService._outbound_weight_within_stock(
@@ -420,6 +744,21 @@ class InventoryService:
                 if oldest_available_lot_id and oldest_available_lot_id != data.lot_id:
                     raise InsufficientInventoryError("古いロットから順に出庫してください")
 
+                loc_qty, loc_weight = await InventoryService._get_lot_location_balance(
+                    db, data.lot_id, resolved_location_id
+                )
+                effective_loc = InventoryService._effective_stock_quantity(
+                    loc_qty,
+                    loc_weight,
+                    inventory.weight_per_unit,
+                )
+                if data.quantity > effective_loc or not InventoryService._outbound_weight_within_stock(
+                    data.weight, loc_weight
+                ):
+                    raise InsufficientLocationInventoryError(
+                        "選択した保管場所の在庫が不足しています"
+                    )
+
             insert_quantity = data.quantity
             insert_weight = data.weight
             if data.type == TransactionType.OUT:
@@ -433,8 +772,9 @@ class InventoryService:
                 cursor = await db.execute(
                     """
                     INSERT INTO transactions
-                    (material_id, lot_id, type, quantity, weight, unit_price, memo, idempotency_key)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    (material_id, lot_id, type, quantity, weight, unit_price, memo,
+                     idempotency_key, location_id, location_from_id, location_to_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
                     """,
                     (
                         data.material_id,
@@ -445,6 +785,7 @@ class InventoryService:
                         data.unit_price,
                         data.memo,
                         data.idempotency_key,
+                        resolved_location_id,
                     ),
                 )
                 await db.commit()
@@ -469,9 +810,17 @@ class InventoryService:
         try:
             cursor = await db.execute(
                 """
-                SELECT transactions.*, lots.lot_code
+                SELECT
+                    transactions.*,
+                    lots.lot_code,
+                    sl.name AS location_name,
+                    slf.name AS location_from_name,
+                    slt.name AS location_to_name
                 FROM transactions
                 LEFT JOIN lots ON lots.id = transactions.lot_id
+                LEFT JOIN stock_locations sl ON sl.id = transactions.location_id
+                LEFT JOIN stock_locations slf ON slf.id = transactions.location_from_id
+                LEFT JOIN stock_locations slt ON slt.id = transactions.location_to_id
                 WHERE transactions.id = ?
                 """,
                 (tx_id,),
@@ -492,9 +841,17 @@ class InventoryService:
         try:
             cursor = await db.execute(
                 """
-                SELECT transactions.*, lots.lot_code
+                SELECT
+                    transactions.*,
+                    lots.lot_code,
+                    sl.name AS location_name,
+                    slf.name AS location_from_name,
+                    slt.name AS location_to_name
                 FROM transactions
                 LEFT JOIN lots ON lots.id = transactions.lot_id
+                LEFT JOIN stock_locations sl ON sl.id = transactions.location_id
+                LEFT JOIN stock_locations slf ON slf.id = transactions.location_from_id
+                LEFT JOIN stock_locations slt ON slt.id = transactions.location_to_id
                 WHERE transactions.idempotency_key = ?
                 """,
                 (idempotency_key,),
@@ -520,6 +877,9 @@ class InventoryService:
             base_from = """
                 FROM transactions
                 LEFT JOIN lots ON lots.id = transactions.lot_id
+                LEFT JOIN stock_locations sl ON sl.id = transactions.location_id
+                LEFT JOIN stock_locations slf ON slf.id = transactions.location_from_id
+                LEFT JOIN stock_locations slt ON slt.id = transactions.location_to_id
                 WHERE 1=1
             """
             params: list = []
@@ -544,7 +904,9 @@ class InventoryService:
             total = int(count_row["c"]) if count_row else 0
 
             data_sql = (
-                f"SELECT transactions.*, lots.lot_code {base_from} "
+                f"SELECT transactions.*, lots.lot_code, "
+                f"sl.name AS location_name, slf.name AS location_from_name, "
+                f"slt.name AS location_to_name {base_from} "
                 "ORDER BY transactions.created_at DESC LIMIT ? OFFSET ?"
             )
             cursor = await db.execute(data_sql, params + [limit, offset])

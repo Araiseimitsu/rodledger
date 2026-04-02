@@ -1,6 +1,15 @@
 <script>
   import { onMount } from 'svelte';
-  import { fetchDashboard, fetchLots, createTransaction, createIdempotencyKey } from '$lib/api';
+  import {
+    fetchDashboard,
+    fetchLots,
+    createTransaction,
+    createIdempotencyKey,
+    fetchStockLocations,
+    fetchLotLocationStocks,
+  } from '$lib/api';
+  import { filterRowsWithStock } from '$lib/lotLocationStock.js';
+  import { formatShelfLabel } from '$lib/shelfDisplay.js';
   import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
   import {
     beforeWeightInput,
@@ -30,6 +39,10 @@
   let weightInputText = $state('');
   let memo = $state('');
   let idempotencyKey = $state('');
+  let stockLocations = $state([]);
+  let selectedLocationId = $state('');
+  let lotLocationStocks = $state([]);
+  let lotLocationFetchId = 0;
 
   const lotSummaries = $derived(dashboard?.lot_summaries ?? []);
   const availableLotSummaries = $derived(lotSummaries.filter((lot) => lot.current_quantity > 0));
@@ -53,6 +66,8 @@
   const selectedLotSummary = $derived(
     lotSummaries.find((lot) => lot.lot_id === Number(selectedLotId)) ?? null
   );
+
+  const locationsWithStock = $derived(filterRowsWithStock(lotLocationStocks));
 
   const weightReadonlyDisplay = $derived.by(() => {
     const w = normalizeWeight(weight);
@@ -107,6 +122,51 @@
     selectedLotId = lots.length > 0 ? String(lots[0].id) : '';
   }
 
+  function syncLocationForMode() {
+    if (mode === 'return') {
+      if (stockLocations.length === 0) {
+        selectedLocationId = '';
+        return;
+      }
+      const cur = Number(selectedLocationId);
+      const exists = stockLocations.some((loc) => loc.id === cur);
+      if (!exists) selectedLocationId = String(stockLocations[0].id);
+      return;
+    }
+    const rows = locationsWithStock;
+    if (rows.length === 0) {
+      selectedLocationId = '';
+      return;
+    }
+    const cur = Number(selectedLocationId);
+    const ok = rows.some((r) => r.location_id === cur);
+    if (!ok) selectedLocationId = String(rows[0].location_id);
+  }
+
+  async function refreshLotLocations() {
+    if (!selectedLotId) {
+      lotLocationStocks = [];
+      syncLocationForMode();
+      return;
+    }
+    if (mode === 'return') {
+      syncLocationForMode();
+      return;
+    }
+    const fetchId = ++lotLocationFetchId;
+    lotLocationStocks = [];
+    try {
+      const res = await fetchLotLocationStocks(Number(selectedLotId));
+      if (fetchId !== lotLocationFetchId) return;
+      lotLocationStocks = res.items ?? [];
+    } catch (e) {
+      if (fetchId !== lotLocationFetchId) return;
+      console.error(e);
+      lotLocationStocks = [];
+    }
+    syncLocationForMode();
+  }
+
   async function loadData() {
     loading = true;
     error = '';
@@ -115,7 +175,9 @@
       dashboard = await fetchDashboard();
       const { items } = await fetchLots(dashboard.material.id);
       lots = items;
+      stockLocations = await fetchStockLocations();
       syncSelectedLotId();
+      await refreshLotLocations();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';
       console.error(e);
@@ -180,6 +242,11 @@
 
   function canSubmit() {
     const submission = getSubmissionValues();
+    if (mode === 'out') {
+      if (!selectedLocationId || locationsWithStock.length === 0) return false;
+    } else if (stockLocations.length > 0 && !selectedLocationId) {
+      return false;
+    }
     return selectableLots.length > 0 && (submission.quantity > 0 || submission.weight > 0);
   }
 
@@ -191,6 +258,12 @@
     if (!selectedLotId || !selectableLots.some((lot) => String(lot.id) === String(selectedLotId))) {
       syncSelectedLotId();
     }
+  });
+
+  $effect(() => {
+    selectedLotId;
+    mode;
+    void refreshLotLocations();
   });
 
   function handleRetry() {
@@ -219,6 +292,7 @@
         unit_price: selectedLot?.unit_price,
         memo: memo || undefined,
         idempotency_key: idempotencyKey,
+        location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
       });
       idempotencyKey = '';
       goto('/history');
@@ -329,6 +403,66 @@
                 >expand_more</span
               >
             </div>
+          </div>
+
+          <!-- Stock location -->
+          <div class="space-y-3">
+            <label
+              for="stock-location-select"
+              class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+              >{mode === 'out' ? '出庫元（保管場所）' : '戻し先（保管場所）'}</label
+            >
+            {#if mode === 'out'}
+              {#if stockLocations.length === 0}
+                <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
+              {:else if locationsWithStock.length === 0}
+                <p class="text-sm text-on-surface-variant">
+                  このロットで在庫のある棚がありません（読み込み中、または別ロットを選んでください）。
+                </p>
+              {:else}
+                <div class="relative">
+                  <select
+                    id="stock-location-select"
+                    bind:value={selectedLocationId}
+                    class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
+                  >
+                    {#each locationsWithStock as row}
+                      <option value={String(row.location_id)}>
+                        {formatShelfLabel(row.location_name)}（{row.current_quantity}本 / {row.current_weight.toFixed(
+                          3,
+                        )}kg）
+                      </option>
+                    {/each}
+                  </select>
+                  <span
+                    class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
+                    >expand_more</span
+                  >
+                </div>
+                <p class="text-xs text-on-surface-variant">
+                  同一ロットが複数の棚に分かれて置かれている場合は、出庫元の棚を選びます。その棚に残っている本数・重量の範囲で出庫できます。
+                </p>
+              {/if}
+            {:else if stockLocations.length === 0}
+              <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
+            {:else}
+              <div class="relative">
+                <select
+                  id="stock-location-select"
+                  bind:value={selectedLocationId}
+                  class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
+                >
+                  {#each stockLocations as loc}
+                    <option value={String(loc.id)}>{formatShelfLabel(loc.name)}</option>
+                  {/each}
+                </select>
+                <span
+                  class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
+                  >expand_more</span
+                >
+              </div>
+              <p class="text-xs text-on-surface-variant">戻し先の保管場所を指定します。</p>
+            {/if}
           </div>
 
           <!-- Quantity / Weight -->

@@ -106,6 +106,7 @@
       out: 'north_east',
       return: 'assignment_return',
       adjust: 'tune',
+      transfer: 'swap_horiz',
     };
     return icons[type] || 'swap_horiz';
   }
@@ -116,6 +117,7 @@
       out: 'text-error',
       return: 'text-secondary',
       adjust: 'text-tertiary',
+      transfer: 'text-on-surface',
     };
     return colors[type] || 'text-on-surface';
   }
@@ -126,6 +128,7 @@
       out: 'bg-error/10 text-error',
       return: 'bg-secondary-container text-on-secondary-container',
       adjust: 'bg-tertiary-container/30 text-on-tertiary-container',
+      transfer: 'bg-surface-container-highest text-on-surface',
     };
     return colors[type] || 'bg-surface-container text-on-surface';
   }
@@ -136,8 +139,22 @@
       out: '出庫',
       return: '戻し',
       adjust: '修正',
+      transfer: '移動',
     };
     return labels[type] || type;
+  }
+
+  /** @param {import('$lib/api').Transaction} tx */
+  function formatLocationLine(tx) {
+    if (tx.type === 'transfer') {
+      const from = tx.location_from_name || '—';
+      const to = tx.location_to_name || '—';
+      return `棚番 ${from} → 棚番 ${to}`;
+    }
+    if (tx.location_name) {
+      return `棚番 ${tx.location_name}`;
+    }
+    return '';
   }
 
   const groupedTransactions = $derived(groupByDate(transactions));
@@ -212,6 +229,18 @@
       >
         戻し
       </button>
+      <button
+        onclick={() => {
+          filterType = 'transfer';
+          page = 1;
+        }}
+        class="px-4 py-2 rounded-xl font-label text-xs font-semibold whitespace-nowrap transition-colors {filterType ===
+        'transfer'
+          ? 'bg-surface-container-highest text-on-surface'
+          : 'bg-surface-container-low text-on-surface-variant hover:bg-surface-container-highest'}"
+      >
+        移動
+      </button>
     </div>
 
     <PaginationBar bind:page total={totalCount} pageSize={PAGE_SIZE} disabled={loading} />
@@ -267,13 +296,22 @@
                 </div>
                 <p class="font-body text-on-surface">{tx.memo || 'メモなし'}</p>
                 <p class="mt-1 text-xs text-on-surface-variant">{tx.lot_code || 'ロット不明'}</p>
+                {#if formatLocationLine(tx)}
+                  <p class="mt-1 text-xs text-on-surface-variant">{formatLocationLine(tx)}</p>
+                {/if}
               </div>
             </div>
             <div class="mt-4 md:mt-0 flex items-center gap-12 text-right">
               <div class="flex flex-col">
                 <span class="font-label text-[11px] text-on-surface-variant uppercase">数量</span>
                 <span class="font-headline text-xl text-on-surface">
-                  {tx.type === 'in' || tx.type === 'return' ? '+' : '-'} {tx.quantity}
+                  {#if tx.type === 'transfer'}
+                    {tx.quantity}
+                  {:else if tx.type === 'in' || tx.type === 'return'}
+                    + {tx.quantity}
+                  {:else}
+                    - {tx.quantity}
+                  {/if}
                 </span>
               </div>
               <div class="flex flex-col">
