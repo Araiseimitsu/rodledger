@@ -9,8 +9,12 @@
     fetchLotLocationStocks,
   } from '$lib/api';
   import { filterRowsWithStock } from '$lib/lotLocationStock.js';
+  import {
+    readLastStockLocationId,
+    sameStringArray,
+    writeLastStockLocationId,
+  } from '$lib/lastStockLocationPreference.js';
   import { firstLotIdString, sortLotsOldestFirst } from '$lib/lotSort.js';
-  import { formatShelfLabel } from '$lib/shelfDisplay.js';
   import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
   import {
     beforeWeightInput,
@@ -31,8 +35,8 @@
   let entryMode = $state('quantity');
   let quantityStep = $state(10);
   let selectedLotId = $state('');
-  let locationFromId = $state('');
-  let locationToId = $state('');
+  let locationFromIds = $state([]);
+  let locationToIds = $state([]);
   let quantity = $state(0);
   let weight = $state(0);
   let weightInputText = $state('');
@@ -94,18 +98,71 @@
     selectedLotId = firstLotIdString(selectableLots);
   }
 
+  function setLocationFromIds(next) {
+    if (!sameStringArray(next, locationFromIds)) {
+      locationFromIds = next;
+    }
+  }
+
+  function setLocationToIds(next) {
+    if (!sameStringArray(next, locationToIds)) {
+      locationToIds = next;
+    }
+  }
+
   function syncLocationPair() {
-    if (locationsWithStock.length > 0 && !locationFromId) {
-      locationFromId = String(locationsWithStock[0].location_id);
-    }
-    const fromNum = Number(locationFromId);
-    const toCandidates = stockLocations.filter((loc) => loc.id !== fromNum);
-    if (toCandidates.length > 0) {
-      const toIdStr = String(toCandidates[0].id);
-      if (!locationToId || Number(locationToId) === fromNum) {
-        locationToId = toIdStr;
+    if (locationsWithStock.length > 0) {
+      const validFrom = new Set(locationsWithStock.map((r) => String(r.location_id)));
+      const filteredFrom = locationFromIds.filter((id) => validFrom.has(String(id)));
+      if (filteredFrom.length > 0) {
+        setLocationFromIds(filteredFrom);
+      } else {
+        const preferred = readLastStockLocationId();
+        const nextFrom =
+          preferred != null && validFrom.has(String(preferred))
+            ? [String(preferred)]
+            : [String(locationsWithStock[0].location_id)];
+        setLocationFromIds(nextFrom);
       }
+    } else if (locationFromIds.length > 0) {
+      locationFromIds = [];
     }
+
+    const fromPrimary = Number(locationFromIds[0]);
+    const toCandidates = stockLocations.filter((loc) => loc.id !== fromPrimary);
+    if (toCandidates.length === 0) {
+      setLocationToIds([]);
+      return;
+    }
+    const validTo = new Set(toCandidates.map((loc) => String(loc.id)));
+    const filteredTo = locationToIds.filter((id) => validTo.has(String(id)));
+    if (filteredTo.length > 0) {
+      setLocationToIds(filteredTo);
+    } else {
+      setLocationToIds([]);
+    }
+  }
+
+  function getSelectedFromLabels() {
+    const selected = new Set(locationFromIds.map(String));
+    return locationsWithStock
+      .filter((row) => selected.has(String(row.location_id)))
+      .map((row) => String(row.location_name).trim());
+  }
+
+  function getSelectedToLabels() {
+    const selected = new Set(locationToIds.map(String));
+    return stockLocations
+      .filter((loc) => selected.has(String(loc.id)))
+      .map((loc) => String(loc.name).trim());
+  }
+
+  function isLocationFromSelected(locationId) {
+    return locationFromIds.includes(String(locationId));
+  }
+
+  function isLocationToSelected(locationId) {
+    return locationToIds.includes(String(locationId));
   }
 
   async function refreshLotLocations() {
@@ -154,7 +211,7 @@
   });
 
   $effect(() => {
-    locationFromId;
+    locationFromIds;
     locationsWithStock;
     stockLocations;
     syncLocationPair();
@@ -195,8 +252,8 @@
   function canSubmit() {
     const submission = getSubmissionValues();
     if (selectableLots.length === 0) return false;
-    if (!selectedLotId || !locationFromId || !locationToId) return false;
-    if (Number(locationFromId) === Number(locationToId)) return false;
+    if (!selectedLotId || locationFromIds.length === 0 || locationToIds.length === 0) return false;
+    if (Number(locationFromIds[0]) === Number(locationToIds[0])) return false;
     return submission.quantity > 0 || submission.weight > 0;
   }
 
@@ -224,6 +281,8 @@
       }
 
       const selectedLot = lots.find((l) => l.id === Number(selectedLotId));
+      const fromId = Number(locationFromIds[0]);
+      const toId = Number(locationToIds[0]);
       await createTransaction({
         material_id: dashboard.material.id,
         lot_id: Number(selectedLotId),
@@ -233,9 +292,10 @@
         unit_price: selectedLot?.unit_price,
         memo: memo || undefined,
         idempotency_key: idempotencyKey,
-        location_from_id: Number(locationFromId),
-        location_to_id: Number(locationToId),
+        location_from_id: fromId,
+        location_to_id: toId,
       });
+      writeLastStockLocationId(fromId);
       idempotencyKey = '';
       goto('/history');
     } catch (e) {
@@ -308,58 +368,86 @@
             </div>
           </div>
 
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="space-y-3">
-              <label
-                for="loc-from"
-                class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-                >移動元</label
-              >
-              <div class="relative">
-                <select
-                  id="loc-from"
-                  bind:value={locationFromId}
-                  disabled={locationsWithStock.length === 0}
-                  class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
-                >
-                  {#if locationsWithStock.length === 0}
-                    <option value="">在庫のある場所がありません</option>
-                  {:else}
-                    {#each locationsWithStock as row}
-                      <option value={String(row.location_id)}>
-                        {row.location_name}（{row.current_quantity}本 / {row.current_weight.toFixed(3)}kg）
-                      </option>
+          <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div class="space-y-4">
+              <p class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase">
+                移動元（複数選択）
+              </p>
+              {#if locationsWithStock.length === 0}
+                <p class="text-sm text-on-surface-variant">在庫のある場所がありません（別ロットを選んでください）。</p>
+              {:else}
+                <div class="rounded-2xl bg-surface-container-low p-4">
+                  <div class="mb-4 flex flex-wrap gap-2">
+                    {#each getSelectedFromLabels() as label}
+                      <span class="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{label}</span>
                     {/each}
-                  {/if}
-                </select>
-                <span
-                  class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                  >expand_more</span
-                >
-              </div>
+                  </div>
+                  <div class="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto md:grid-cols-3">
+                    {#each locationsWithStock as row}
+                      <label
+                        class="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors {isLocationFromSelected(row.location_id)
+                          ? 'bg-primary/10 text-on-surface'
+                          : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}"
+                      >
+                        <input
+                          type="checkbox"
+                          bind:group={locationFromIds}
+                          value={String(row.location_id)}
+                          class="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary"
+                        />
+                        <span class="flex min-w-0 flex-col">
+                          <span>{String(row.location_name).trim()}</span>
+                          <span class="text-xs font-normal text-on-surface-variant tabular-nums"
+                            >{row.current_quantity}本 / {row.current_weight.toFixed(3)}kg</span
+                          >
+                        </span>
+                      </label>
+                    {/each}
+                  </div>
+                </div>
+              {/if}
             </div>
-            <div class="space-y-3">
-              <label
-                for="loc-to"
-                class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-                >移動先</label
-              >
-              <div class="relative">
-                <select
-                  id="loc-to"
-                  bind:value={locationToId}
-                  disabled={stockLocations.length === 0}
-                  class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
-                >
-                  {#each stockLocations.filter((loc) => loc.id !== Number(locationFromId)) as loc}
-                    <option value={String(loc.id)}>{formatShelfLabel(loc.name)}</option>
-                  {/each}
-                </select>
-                <span
-                  class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                  >expand_more</span
-                >
-              </div>
+
+            <div class="space-y-4">
+              <p class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase">
+                移動先（複数選択）
+              </p>
+              {#if stockLocations.length === 0}
+                <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
+              {:else if locationFromIds.length === 0}
+                <p class="text-sm text-on-surface-variant">先に移動元を選んでください。</p>
+              {:else}
+                {@const fromPrimary = Number(locationFromIds[0])}
+                {@const toCandidates = stockLocations.filter((loc) => loc.id !== fromPrimary)}
+                {#if toCandidates.length === 0}
+                  <p class="text-sm text-on-surface-variant">移動先として選べる棚がありません。</p>
+                {:else}
+                  <div class="rounded-2xl bg-surface-container-low p-4">
+                    <div class="mb-4 flex flex-wrap gap-2">
+                      {#each getSelectedToLabels() as label}
+                        <span class="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{label}</span>
+                      {/each}
+                    </div>
+                    <div class="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto md:grid-cols-3">
+                      {#each toCandidates as loc}
+                        <label
+                          class="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors {isLocationToSelected(loc.id)
+                            ? 'bg-primary/10 text-on-surface'
+                            : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}"
+                        >
+                          <input
+                            type="checkbox"
+                            bind:group={locationToIds}
+                            value={String(loc.id)}
+                            class="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary"
+                          />
+                          <span>{String(loc.name).trim()}</span>
+                        </label>
+                      {/each}
+                    </div>
+                  </div>
+                {/if}
+              {/if}
             </div>
           </div>
 

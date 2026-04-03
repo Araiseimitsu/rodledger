@@ -74,6 +74,7 @@ async def init_db():
                 unit_price REAL NOT NULL,
                 created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
                 memo TEXT,
+                location_note TEXT,
                 idempotency_key TEXT,
                 location_id INTEGER,
                 location_from_id INTEGER,
@@ -87,6 +88,7 @@ async def init_db():
         """)
 
         await _ensure_transaction_idempotency_key(db)
+        await _ensure_transaction_location_note(db)
         await _ensure_all_shelf_numbers_seeded(db)
         await _migrate_legacy_transactions_table(db)
         await _migrate_stock_locations_legacy_names(db)
@@ -204,6 +206,16 @@ async def _ensure_transaction_idempotency_key(db: aiosqlite.Connection):
     await db.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency_key ON transactions(idempotency_key)"
     )
+
+
+async def _ensure_transaction_location_note(db: aiosqlite.Connection):
+    """既存DBに location_note を追加する"""
+    cursor = await db.execute("PRAGMA table_info(transactions)")
+    columns = await cursor.fetchall()
+    has_column = any(column["name"] == "location_note" for column in columns)
+
+    if not has_column:
+        await db.execute("ALTER TABLE transactions ADD COLUMN location_note TEXT")
 
 
 async def _ensure_all_shelf_numbers_seeded(db: aiosqlite.Connection):
@@ -358,6 +370,7 @@ async def _migrate_legacy_transactions_table(db: aiosqlite.Connection):
             unit_price REAL NOT NULL,
             created_at TEXT NOT NULL DEFAULT (datetime('now', 'localtime')),
             memo TEXT,
+            location_note TEXT,
             idempotency_key TEXT,
             location_id INTEGER,
             location_from_id INTEGER,
@@ -375,11 +388,11 @@ async def _migrate_legacy_transactions_table(db: aiosqlite.Connection):
         f"""
         INSERT INTO transactions_new (
             id, material_id, lot_id, type, quantity, weight, unit_price,
-            created_at, memo, idempotency_key, location_id, location_from_id, location_to_id
+            created_at, memo, location_note, idempotency_key, location_id, location_from_id, location_to_id
         )
         SELECT
             id, material_id, lot_id, type, quantity, weight, unit_price,
-            created_at, memo, idempotency_key,
+            created_at, memo, NULL, idempotency_key,
             {default_location_id}, NULL, NULL
         FROM transactions
         """

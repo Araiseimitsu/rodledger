@@ -151,6 +151,9 @@
       const to = tx.location_to_name || '—';
       return `棚番 ${from} → 棚番 ${to}`;
     }
+    if (tx.location_note) {
+      return tx.location_note;
+    }
     if (tx.location_name) {
       return `棚番 ${tx.location_name}`;
     }

@@ -160,6 +160,7 @@ class TransactionBase(BaseModel):
     quantity: int = Field(ge=0, description="本数")
     weight: float = Field(ge=0, description="kg")
     memo: Optional[str] = None
+    location_note: Optional[str] = None
     idempotency_key: Optional[str] = None
 
     @model_validator(mode="after")
@@ -195,7 +196,6 @@ class TransactionCreate(TransactionBase):
         if self.location_from_id is not None or self.location_to_id is not None:
             raise ValueError("移動以外では location_from_id / location_to_id は指定できません")
         return self
-
 
 class TransactionUpdate(BaseModel):
     quantity: Optional[int] = Field(default=None, ge=0)

@@ -328,6 +328,35 @@ class InventoryService:
         return rq <= sq + InventoryService._OUTBOUND_WEIGHT_TOLERANCE_KG + 1e-9
 
     @staticmethod
+    async def _insert_non_transfer_transaction(
+        db,
+        data: TransactionCreate,
+        resolved_location_id: int,
+        idempotency_key: Optional[str],
+    ) -> int:
+        cursor = await db.execute(
+            """
+            INSERT INTO transactions
+            (material_id, lot_id, type, quantity, weight, unit_price, memo,
+             location_note, idempotency_key, location_id, location_from_id, location_to_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+            """,
+            (
+                data.material_id,
+                data.lot_id,
+                data.type.value,
+                data.quantity,
+                data.weight,
+                data.unit_price,
+                data.memo,
+                data.location_note,
+                idempotency_key,
+                resolved_location_id,
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    @staticmethod
     def _effective_stock_quantity(
         quantity: int,
         weight: float,
@@ -882,27 +911,24 @@ class InventoryService:
                 )
 
             try:
-                cursor = await db.execute(
-                    """
-                    INSERT INTO transactions
-                    (material_id, lot_id, type, quantity, weight, unit_price, memo,
-                     idempotency_key, location_id, location_from_id, location_to_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
-                    """,
-                    (
-                        data.material_id,
-                        data.lot_id,
-                        data.type.value,
-                        insert_quantity,
-                        insert_weight,
-                        data.unit_price,
-                        data.memo,
-                        data.idempotency_key,
-                        resolved_location_id,
+                tx_id = await InventoryService._insert_non_transfer_transaction(
+                    db,
+                    TransactionCreate(
+                        material_id=data.material_id,
+                        lot_id=data.lot_id,
+                        type=data.type,
+                        quantity=insert_quantity,
+                        weight=insert_weight,
+                        unit_price=data.unit_price,
+                        memo=data.memo,
+                        location_note=data.location_note,
+                        idempotency_key=data.idempotency_key,
+                        location_id=resolved_location_id,
                     ),
+                    resolved_location_id,
+                    data.idempotency_key,
                 )
                 await db.commit()
-                tx_id = cursor.lastrowid
             except sqlite3.IntegrityError:
                 if data.idempotency_key:
                     existing = await InventoryService.get_transaction_by_idempotency_key(

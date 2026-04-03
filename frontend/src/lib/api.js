@@ -109,6 +109,7 @@ async function requestJson(path, options = {}) {
  * @property {number} unit_price
  * @property {string} created_at
  * @property {string} [memo]
+ * @property {string} [location_note]
  * @property {string} [idempotency_key]
  * @property {string} [lot_code]
  * @property {number} [location_id]
@@ -230,6 +231,7 @@ async function requestJson(path, options = {}) {
  * @property {number} weight
  * @property {number} [unit_price]
  * @property {string} [memo]
+ * @property {string} [location_note]
  * @property {string} [idempotency_key]
  * @property {number} [location_id]
  * @property {number} [location_from_id]

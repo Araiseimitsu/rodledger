@@ -9,8 +9,12 @@
     fetchLotLocationStocks,
   } from '$lib/api';
   import { filterRowsWithStock } from '$lib/lotLocationStock.js';
+  import {
+    readLastStockLocationId,
+    sameStringArray,
+    writeLastStockLocationId,
+  } from '$lib/lastStockLocationPreference.js';
   import { firstLotIdString, sortLotsOldestFirst } from '$lib/lotSort.js';
-  import { formatShelfLabel } from '$lib/shelfDisplay.js';
   import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
   import {
     beforeWeightInput,
@@ -41,7 +45,7 @@
   let memo = $state('');
   let idempotencyKey = $state('');
   let stockLocations = $state([]);
-  let selectedLocationId = $state('');
+  let selectedLocationIds = $state([]);
   let lotLocationStocks = $state([]);
   let lotLocationFetchId = 0;
 
@@ -106,35 +110,80 @@
     selectedLotId = firstLotIdString(selectableLots);
   }
 
-  function syncLocationForMode() {
+  /** 有効な id のみ残し、空なら直近の選択または先頭1件を入れる */
+  function assignSelectedLocationIds(availableIds, firstId) {
+    const filtered = selectedLocationIds.filter((id) => availableIds.has(String(id)));
+    if (filtered.length > 0) {
+      if (!sameStringArray(filtered, selectedLocationIds)) {
+        selectedLocationIds = filtered;
+      }
+      return;
+    }
+    const preferred = readLastStockLocationId();
+    if (preferred != null && availableIds.has(String(preferred))) {
+      const next = [String(preferred)];
+      if (!sameStringArray(next, selectedLocationIds)) {
+        selectedLocationIds = next;
+      }
+      return;
+    }
+    const next = [firstId];
+    if (!sameStringArray(next, selectedLocationIds)) {
+      selectedLocationIds = next;
+    }
+  }
+
+  function syncSelectedLocations() {
     if (mode === 'return') {
       if (stockLocations.length === 0) {
-        selectedLocationId = '';
+        if (selectedLocationIds.length > 0) {
+          selectedLocationIds = [];
+        }
         return;
       }
-      const cur = Number(selectedLocationId);
-      const exists = stockLocations.some((loc) => loc.id === cur);
-      if (!exists) selectedLocationId = String(stockLocations[0].id);
+      const availableIds = new Set(stockLocations.map((loc) => String(loc.id)));
+      assignSelectedLocationIds(availableIds, String(stockLocations[0].id));
       return;
     }
     const rows = locationsWithStock;
     if (rows.length === 0) {
-      selectedLocationId = '';
+      if (selectedLocationIds.length > 0) {
+        selectedLocationIds = [];
+      }
       return;
     }
-    const cur = Number(selectedLocationId);
-    const ok = rows.some((r) => r.location_id === cur);
-    if (!ok) selectedLocationId = String(rows[0].location_id);
+    const availableIds = new Set(rows.map((r) => String(r.location_id)));
+    assignSelectedLocationIds(availableIds, String(rows[0].location_id));
+  }
+
+  function getSelectedLocationLabels() {
+    const selected = new Set(selectedLocationIds.map(String));
+    if (mode === 'return') {
+      return stockLocations
+        .filter((loc) => selected.has(String(loc.id)))
+        .map((loc) => String(loc.name).trim());
+    }
+    return locationsWithStock
+      .filter((row) => selected.has(String(row.location_id)))
+      .map((row) => String(row.location_name).trim());
+  }
+
+  function buildLocationNote() {
+    return getSelectedLocationLabels().join(', ');
+  }
+
+  function isLocationSelected(locationId) {
+    return selectedLocationIds.includes(String(locationId));
   }
 
   async function refreshLotLocations() {
     if (!selectedLotId) {
       lotLocationStocks = [];
-      syncLocationForMode();
+      syncSelectedLocations();
       return;
     }
     if (mode === 'return') {
-      syncLocationForMode();
+      syncSelectedLocations();
       return;
     }
     const fetchId = ++lotLocationFetchId;
@@ -148,7 +197,7 @@
       console.error(e);
       lotLocationStocks = [];
     }
-    syncLocationForMode();
+    syncSelectedLocations();
   }
 
   async function loadData() {
@@ -227,8 +276,8 @@
   function canSubmit() {
     const submission = getSubmissionValues();
     if (mode === 'out') {
-      if (!selectedLocationId || locationsWithStock.length === 0) return false;
-    } else if (stockLocations.length > 0 && !selectedLocationId) {
+      if (selectedLocationIds.length === 0 || locationsWithStock.length === 0) return false;
+    } else if (stockLocations.length > 0 && selectedLocationIds.length === 0) {
       return false;
     }
     return selectableLots.length > 0 && (submission.quantity > 0 || submission.weight > 0);
@@ -267,6 +316,7 @@
       }
 
       const selectedLot = lots.find((l) => l.id === Number(selectedLotId));
+      const primaryLocationId = selectedLocationIds[0] ? Number(selectedLocationIds[0]) : undefined;
       await createTransaction({
         material_id: dashboard.material.id,
         lot_id: Number(selectedLotId),
@@ -275,9 +325,13 @@
         weight: submission.weight,
         unit_price: selectedLot?.unit_price,
         memo: memo || undefined,
+        location_note: buildLocationNote() || undefined,
         idempotency_key: idempotencyKey,
-        location_id: selectedLocationId ? Number(selectedLocationId) : undefined,
+        location_id: primaryLocationId,
       });
+      if (primaryLocationId != null) {
+        writeLastStockLocationId(primaryLocationId);
+      }
       idempotencyKey = '';
       goto('/history');
     } catch (e) {
@@ -380,12 +434,11 @@
           </div>
 
           <!-- Stock location -->
-          <div class="space-y-3">
-            <label
-              for="stock-location-select"
-              class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-              >{mode === 'out' ? '出庫元（保管場所）' : '戻し先（保管場所）'}</label
-            >
+          <div class="space-y-4">
+            <p class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase">
+              {mode === 'out' ? '出庫元（保管場所・複数選択）' : '戻し先（保管場所・複数選択）'}
+            </p>
+
             {#if mode === 'out'}
               {#if stockLocations.length === 0}
                 <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
@@ -394,43 +447,62 @@
                   このロットで在庫のある棚がありません（読み込み中、または別ロットを選んでください）。
                 </p>
               {:else}
-                <div class="relative">
-                  <select
-                    id="stock-location-select"
-                    bind:value={selectedLocationId}
-                    class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
-                  >
-                    {#each locationsWithStock as row}
-                      <option value={String(row.location_id)}>
-                        {formatShelfLabel(row.location_name)}（{row.current_quantity}本 / {row.current_weight.toFixed(
-                          3,
-                        )}kg）
-                      </option>
+                <div class="rounded-2xl bg-surface-container-low p-4">
+                  <div class="mb-4 flex flex-wrap gap-2">
+                    {#each getSelectedLocationLabels() as label}
+                      <span class="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{label}</span>
                     {/each}
-                  </select>
-                  <span
-                    class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                    >expand_more</span
-                  >
+                  </div>
+                  <div class="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto md:grid-cols-4 xl:grid-cols-5">
+                    {#each locationsWithStock as row}
+                      <label
+                        class="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors {isLocationSelected(row.location_id)
+                          ? 'bg-primary/10 text-on-surface'
+                          : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}"
+                      >
+                        <input
+                          type="checkbox"
+                          bind:group={selectedLocationIds}
+                          value={String(row.location_id)}
+                          class="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary"
+                        />
+                        <span class="flex min-w-0 flex-col">
+                          <span>{String(row.location_name).trim()}</span>
+                          <span class="text-xs font-normal text-on-surface-variant tabular-nums"
+                            >{row.current_quantity}本 / {row.current_weight.toFixed(3)}kg</span
+                          >
+                        </span>
+                      </label>
+                    {/each}
+                  </div>
                 </div>
               {/if}
             {:else if stockLocations.length === 0}
               <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
             {:else}
-              <div class="relative">
-                <select
-                  id="stock-location-select"
-                  bind:value={selectedLocationId}
-                  class="w-full bg-surface-container-low border-none rounded-xl py-4 px-6 text-on-surface focus:ring-2 focus:ring-primary/40 transition-all appearance-none cursor-pointer text-lg font-medium"
-                >
-                  {#each stockLocations as loc}
-                    <option value={String(loc.id)}>{formatShelfLabel(loc.name)}</option>
+              <div class="rounded-2xl bg-surface-container-low p-4">
+                <div class="mb-4 flex flex-wrap gap-2">
+                  {#each getSelectedLocationLabels() as label}
+                    <span class="rounded-full bg-primary/10 px-3 py-1 text-xs font-semibold text-primary">{label}</span>
                   {/each}
-                </select>
-                <span
-                  class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                  >expand_more                </span
-                >
+                </div>
+                <div class="grid max-h-64 grid-cols-2 gap-2 overflow-y-auto md:grid-cols-4 xl:grid-cols-5">
+                  {#each stockLocations as loc}
+                    <label
+                      class="flex cursor-pointer items-center gap-3 rounded-xl px-3 py-3 text-sm font-semibold transition-colors {isLocationSelected(loc.id)
+                        ? 'bg-primary/10 text-on-surface'
+                        : 'bg-surface-container text-on-surface hover:bg-surface-container-high'}"
+                    >
+                      <input
+                        type="checkbox"
+                        bind:group={selectedLocationIds}
+                        value={String(loc.id)}
+                        class="h-4 w-4 rounded border-outline-variant text-primary focus:ring-primary"
+                      />
+                      <span>{String(loc.name).trim()}</span>
+                    </label>
+                  {/each}
+                </div>
               </div>
             {/if}
           </div>

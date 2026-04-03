@@ -1,1 +1,0 @@
-function s(e){return e.slice().sort((t,r)=>{const i=new Date(t.created_at).getTime(),n=new Date(r.created_at).getTime();return i!==n?i-n:t.id-r.id})}function o(e){const t=e[0];return t?String(t.id):""}export{o as f,s};

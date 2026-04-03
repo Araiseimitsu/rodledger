@@ -1,0 +1,15 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]:
+      - generic [ref=e6]:
+        - button "menu" [ref=e7] [cursor=pointer]:
+          - generic [ref=e8]: menu
+        - heading "RodLedger β" [level=1] [ref=e9]
+      - navigation [ref=e10]:
+        - button "Home" [ref=e11] [cursor=pointer]
+        - button "In" [ref=e12] [cursor=pointer]
+        - button "Out" [ref=e13] [cursor=pointer]
+        - button "Move" [ref=e14] [cursor=pointer]
+        - button "Lots" [ref=e15] [cursor=pointer]
+        - button "History" [ref=e16] [cursor=pointer]
+  - generic [ref=e19]: progress_activity
