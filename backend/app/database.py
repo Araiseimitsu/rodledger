@@ -281,6 +281,9 @@ async def _migrate_lots_unique_per_material(db: aiosqlite.Connection) -> None:
     if not row or not _should_migrate_lots_to_material_scoped_lot_code(row["sql"]):
         return
 
+    # 未コミットのトランザクション内では PRAGMA foreign_keys=OFF が no-op になり、
+    # DROP TABLE lots が transactions からの FK で失敗するため、先に確定する。
+    await db.commit()
     await db.execute("PRAGMA foreign_keys = OFF")
     try:
         await db.execute(
