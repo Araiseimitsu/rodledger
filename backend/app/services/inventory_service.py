@@ -1,9 +1,12 @@
 """
 在庫計算サービス
 """
+import logging
 import math
 from typing import Optional
 import sqlite3
+
+logger = logging.getLogger(__name__)
 
 from app.database import get_db
 from app.models.models import (
@@ -357,7 +360,7 @@ class InventoryService:
         summary: LotInventorySummary,
         weight_per_unit: float,
     ) -> LotInventorySummary:
-        """実効在庫ゼロのロットは表示・FIFO・合計から除外する（本数・重量・金額を 0 に正規化）"""
+        """実効在庫ゼロのロットは表示・集計から除外する（本数・重量・金額を 0 に正規化）"""
         if InventoryService._effective_stock_quantity(
             summary.current_quantity,
             summary.current_weight,
@@ -379,7 +382,7 @@ class InventoryService:
         db,
         material_id: int,
     ) -> list[LotInventorySummary]:
-        """材料に紐づくロット別在庫を FIFO 順で集計する"""
+        """材料に紐づくロット別在庫を作成日時昇順で集計する"""
         cursor = await db.execute(
             """
             SELECT
@@ -429,7 +432,7 @@ class InventoryService:
     def _get_oldest_available_lot_id(
         lot_summaries: list[LotInventorySummary],
     ) -> Optional[int]:
-        """FIFO で次に使用すべきロット ID を返す"""
+        """在庫のあるロットのうち、作成日時が最も古いものの ID を返す"""
         for lot_summary in lot_summaries:
             if lot_summary.current_quantity > 0 or lot_summary.current_weight > 0:
                 return lot_summary.lot_id
@@ -623,6 +626,47 @@ class InventoryService:
         return await InventoryService.get_lot(lot_id)
 
     @staticmethod
+    async def _merge_lots_into_target(
+        source: Lot, target: Lot, final_unit_price: float
+    ) -> Lot:
+        """
+        編集対象ロットの履歴を、同一材料・同一ロットコードの既存ロットへ統合する。
+        UNIQUE(material_id, lot_code) によりコード変更だけでは同一コードにできないため、
+        取引の lot_id を付け替えてから元ロット行を削除する。
+        """
+        if source.id == target.id:
+            return await InventoryService.get_lot(source.id)
+        if source.material_id != target.material_id:
+            raise ValueError("材料が異なるロットは統合できません")
+
+        db = await get_db()
+        try:
+            await db.execute("BEGIN")
+            await db.execute(
+                "UPDATE transactions SET lot_id = ? WHERE lot_id = ?",
+                (target.id, source.id),
+            )
+            await db.execute(
+                "UPDATE lots SET unit_price = ? WHERE id = ?",
+                (final_unit_price, target.id),
+            )
+            await db.execute("DELETE FROM lots WHERE id = ?", (source.id,))
+            await db.commit()
+        except Exception:
+            await db.rollback()
+            raise
+        finally:
+            await db.close()
+
+        logger.info(
+            "ロット統合: 取引を lot_id=%s から lot_id=%s へ移し、元ロットを削除しました",
+            source.id,
+            target.id,
+        )
+
+        return await InventoryService.get_lot(target.id)
+
+    @staticmethod
     async def update_lot(lot_id: int, data: LotUpdate) -> Optional[Lot]:
         """ロットコード・単価の更新"""
         existing = await InventoryService.get_lot(lot_id)
@@ -637,6 +681,14 @@ class InventoryService:
             and InventoryService._unit_prices_equal(next_price, existing.unit_price)
         ):
             return existing
+
+        conflict = await InventoryService.get_lot_by_material_and_code(
+            existing.material_id, next_code
+        )
+        if conflict is not None and conflict.id != existing.id:
+            return await InventoryService._merge_lots_into_target(
+                existing, conflict, next_price
+            )
 
         db = await get_db()
         try:
@@ -804,10 +856,6 @@ class InventoryService:
                     data.weight, selected_lot.current_weight
                 ):
                     raise InsufficientInventoryError("選択したロットの在庫が不足しています")
-
-                oldest_available_lot_id = inventory.oldest_available_lot_id
-                if oldest_available_lot_id and oldest_available_lot_id != data.lot_id:
-                    raise InsufficientInventoryError("古いロットから順に出庫してください")
 
                 loc_qty, loc_weight = await InventoryService._get_lot_location_balance(
                     db, data.lot_id, resolved_location_id

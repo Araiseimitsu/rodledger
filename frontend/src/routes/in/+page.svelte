@@ -337,7 +337,6 @@
     <!-- Header -->
     <section class="mb-12">
       <h2 class="font-headline text-4xl lg:text-5xl font-bold tracking-tight text-on-surface mb-2">入庫登録</h2>
-      <p class="font-body text-on-surface-variant text-lg">新しい材料の入庫を記録します。</p>
     </section>
 
     <!-- Entry Card -->
@@ -347,10 +346,7 @@
           <!-- Lot Selection -->
           <div class="space-y-6">
             <div class="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">ロット指定</p>
-                <p class="mt-1 text-sm text-on-surface-variant">既存ロットへ追加するか、新規ロットを作成して入庫します。</p>
-              </div>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">ロット指定</p>
               <div class="inline-flex rounded-full bg-surface-container p-1">
                 <button
                   type="button"
@@ -466,21 +462,13 @@
                   >expand_more</span
                 >
               </div>
-              {#if lotMode === 'existing' && selectedLotId}
-                <p class="text-xs text-on-surface-variant">
-                  既存ロットでは、いま在庫のある棚を入庫先の初期候補にしています。別の棚へ入れる場合は上記から変更してください。
-                </p>
-              {/if}
             {/if}
           </div>
 
           <!-- Quantity / Weight -->
           <div class="space-y-6">
             <div class="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
-                <p class="mt-1 text-sm text-on-surface-variant">本数ベースと重量ベースのどちらでも入庫できます。</p>
-              </div>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
               <div class="inline-flex rounded-full bg-surface-container p-1">
                 <button
                   type="button"
@@ -530,8 +518,6 @@
                         10本
                       </button>
                     </div>
-                  {:else}
-                    <span class="text-xs text-outline-variant">重量から換算した本数を登録します</span>
                   {/if}
                 </div>
                 {#if entryMode === 'quantity'}
@@ -571,12 +557,9 @@
                 {/if}
               </div>
               <div class="space-y-3 min-w-0">
-                <div class="flex items-center justify-between gap-4">
-                  <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-                    >重量（kg）</label
-                  >
-                  <span class="text-xs text-outline-variant">{entryMode === 'quantity' ? '本数から自動計算' : '直接入力'}</span>
-                </div>
+                <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                  >重量（kg）</label
+                >
                 <div class="space-y-2 w-full min-w-0">
                   <input
                     id="weight-input"
@@ -592,9 +575,6 @@
                       ? 'opacity-70'
                       : 'focus:ring-2 focus:ring-primary/40'}"
                   />
-                  <span class="block text-right whitespace-nowrap text-outline-variant text-sm">
-                    {entryMode === 'quantity' ? '自動計算' : '重量のみの入庫にも対応'}
-                  </span>
                 </div>
               </div>
             </div>
@@ -685,15 +665,13 @@
           {#if lotMode === 'new'}
             <div class="mt-4 space-y-2">
               <p class="font-medium text-on-surface">{newLotCode.trim() || '未入力'}</p>
-              <p class="text-sm text-on-surface-variant">単価 ¥{parsedNewLotUnitPrice.toFixed(1)}/kg の新規ロットを作成して入庫します。</p>
             </div>
           {:else if selectedExistingLot}
             <div class="mt-4 space-y-2">
               <p class="font-medium text-on-surface">{selectedExistingLot.lot_code}</p>
-              <p class="text-sm text-on-surface-variant">既存ロットへ追加入庫します。単価は ¥{selectedExistingLot.unit_price}/kg です。</p>
             </div>
           {:else}
-            <p class="mt-4 text-sm text-on-surface-variant">既存ロットがないため、新規ロットを作成して入庫してください。</p>
+            <p class="mt-4 text-sm text-on-surface-variant">新規ロットを作成して入庫してください。</p>
           {/if}
         </div>
       </div>

@@ -164,7 +164,6 @@
   <!-- Header -->
   <section class="mb-12">
     <h2 class="font-headline text-4xl font-bold tracking-tight text-on-surface mb-2">取引履歴</h2>
-    <p class="font-body text-on-surface-variant max-w-lg">材料の移動履歴と在庫調整の記録。メモ・ロットコード・取引IDで検索できます。</p>
   </section>
 
   <!-- Search & Filter -->

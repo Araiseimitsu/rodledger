@@ -9,6 +9,7 @@
     fetchLotLocationStocks,
   } from '$lib/api';
   import { filterRowsWithStock } from '$lib/lotLocationStock.js';
+  import { firstLotIdString, sortLotsOldestFirst } from '$lib/lotSort.js';
   import { formatShelfLabel } from '$lib/shelfDisplay.js';
   import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
   import {
@@ -48,19 +49,9 @@
   const availableLotSummaries = $derived(lotSummaries.filter((lot) => lot.current_quantity > 0));
   const selectableLots = $derived(
     mode === 'out'
-      ? lots
-          .filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id))
-          .slice()
-          .sort((left, right) => {
-            const leftTime = new Date(left.created_at).getTime();
-            const rightTime = new Date(right.created_at).getTime();
-
-            if (leftTime !== rightTime) {
-              return leftTime - rightTime;
-            }
-
-            return left.id - right.id;
-          })
+      ? sortLotsOldestFirst(
+          lots.filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id)),
+        )
       : lots
   );
   const selectedLotSummary = $derived(
@@ -112,14 +103,7 @@
   }
 
   function syncSelectedLotId() {
-    if (mode === 'out') {
-      const preferredLotId = dashboard?.oldest_available_lot_id;
-      const preferredLot = selectableLots.find((lot) => lot.id === preferredLotId) ?? selectableLots[0];
-      selectedLotId = preferredLot ? String(preferredLot.id) : '';
-      return;
-    }
-
-    selectedLotId = lots.length > 0 ? String(lots[0].id) : '';
+    selectedLotId = firstLotIdString(selectableLots);
   }
 
   function syncLocationForMode() {
@@ -338,9 +322,6 @@
       <h2 class="font-headline text-4xl lg:text-5xl font-bold tracking-tight text-on-surface mb-2">
         {mode === 'out' ? '出庫登録' : '戻し登録'}
       </h2>
-      <p class="font-body text-on-surface-variant text-lg">
-        {mode === 'out' ? '材料の出庫を記録します。' : '余剰材料の戻しを記録します。'}
-      </p>
     </section>
 
     <!-- Entry Card -->
@@ -373,13 +354,6 @@
         <form onsubmit={handleSubmit} class="space-y-10">
           <!-- Lot Selection -->
           <div class="space-y-3">
-            {#if mode === 'out' && dashboard?.oldest_available_lot_id}
-              <div class="rounded-2xl border border-primary/20 bg-primary/5 px-4 py-3 text-sm text-on-surface">
-                FIFO の初期候補として
-                <span class="font-semibold">{lotSummaries.find((lot) => lot.lot_id === dashboard.oldest_available_lot_id)?.lot_code}</span>
-                を表示しています。必要に応じて他のロットにも切り替えできます。
-              </div>
-            {/if}
             <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
               >ロット選択</label
             >
@@ -439,9 +413,6 @@
                     >expand_more</span
                   >
                 </div>
-                <p class="text-xs text-on-surface-variant">
-                  同一ロットが複数の棚に分かれて置かれている場合は、出庫元の棚を選びます。その棚に残っている本数・重量の範囲で出庫できます。
-                </p>
               {/if}
             {:else if stockLocations.length === 0}
               <p class="text-sm text-on-surface-variant">保管場所を読み込み中、または取得に失敗しました。</p>
@@ -458,22 +429,16 @@
                 </select>
                 <span
                   class="material-symbols-outlined absolute right-4 top-1/2 -translate-y-1/2 text-outline-variant pointer-events-none"
-                  >expand_more</span
+                  >expand_more                </span
                 >
               </div>
-              <p class="text-xs text-on-surface-variant">戻し先の保管場所を指定します。</p>
             {/if}
           </div>
 
           <!-- Quantity / Weight -->
           <div class="space-y-6 border-y border-outline-variant/15 py-8">
             <div class="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
-                <p class="mt-1 text-sm text-on-surface-variant">
-                  {mode === 'out' ? '本数ベースと重量ベースのどちらでも出庫できます。' : '本数ベースと重量ベースのどちらでも戻し登録できます。'}
-                </p>
-              </div>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
               <div class="inline-flex rounded-full bg-surface-container p-1">
                 <button
                   type="button"
@@ -531,8 +496,6 @@
                         10本
                       </button>
                     </div>
-                  {:else}
-                    <span class="text-xs text-outline-variant">重量から換算した本数を登録します</span>
                   {/if}
                 </div>
                 {#if entryMode === 'quantity'}
@@ -573,12 +536,9 @@
               </div>
 
               <div class="space-y-3 min-w-0">
-                <div class="flex items-center justify-between gap-4">
-                  <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-                    >重量（kg）</label
-                  >
-                  <span class="text-xs text-outline-variant">{entryMode === 'quantity' ? '本数から自動計算' : '直接入力'}</span>
-                </div>
+                <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                  >重量（kg）</label
+                >
                 <div class="space-y-2 w-full min-w-0">
                   <input
                     id="weight-input"
@@ -594,9 +554,6 @@
                       ? 'opacity-70'
                       : 'focus:ring-2 focus:ring-primary/40'}"
                   />
-                  <span class="block text-right whitespace-nowrap text-outline-variant text-sm">
-                    {entryMode === 'quantity' ? '自動計算' : mode === 'out' ? '重量のみの出庫にも対応' : '重量のみの戻しにも対応'}
-                  </span>
                 </div>
               </div>
             </div>
@@ -693,30 +650,6 @@
           {:else}
             <p class="mt-4 text-sm text-on-surface-variant">{mode === 'out' ? '出庫可能なロット在庫がありません。' : '戻し先ロットを選択してください。'}</p>
           {/if}
-        </div>
-
-        <div class="bg-surface-container-low rounded-xl p-6 space-y-4">
-          <h3 class="font-label text-xs font-bold tracking-widest text-on-surface-variant uppercase">FIFO ロット順</h3>
-          <div class="space-y-3">
-            {#each lotSummaries as lot}
-              <div class="rounded-xl border px-4 py-3 {dashboard.oldest_available_lot_id === lot.lot_id
-                ? 'border-primary/30 bg-primary/5'
-                : 'border-outline-variant/15 bg-surface-container'}">
-                <div class="flex items-center justify-between gap-4">
-                  <div>
-                    <p class="font-medium text-on-surface">{lot.lot_code}</p>
-                    <p class="text-xs text-on-surface-variant">{lot.current_weight.toFixed(3)} kg</p>
-                  </div>
-                  <div class="shrink-0 text-right">
-                    <p class="font-semibold tabular-nums text-on-surface whitespace-nowrap">{lot.current_quantity} 本</p>
-                    {#if dashboard.oldest_available_lot_id === lot.lot_id}
-                      <p class="text-[10px] uppercase tracking-widest text-primary">現在優先</p>
-                    {/if}
-                  </div>
-                </div>
-              </div>
-            {/each}
-          </div>
         </div>
 
         <!-- Material Info -->

@@ -34,11 +34,6 @@
     return dashboard?.lot_summaries?.find((s) => s.lot_id === lotId) ?? null;
   }
 
-  function isFifoPriorityLot(lotId, summary) {
-    if (!summary || dashboard?.oldest_available_lot_id !== lotId) return false;
-    return summary.current_quantity > 0 || summary.current_weight > 0;
-  }
-
   function normalizeUnitPrice(value) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed)) return '';
@@ -173,9 +168,6 @@
   <main class="pt-32 pb-24 px-8 md:px-16 lg:px-32 max-w-5xl mx-auto w-full">
     <section class="mb-10">
       <h2 class="font-headline text-4xl lg:text-5xl font-bold tracking-tight text-on-surface mb-2">情報編集</h2>
-      <p class="font-body text-on-surface-variant text-lg max-w-2xl">
-        {dashboard.material.name} のロットコード・単価を変更します。入力ミスがあればここから更新してください。
-      </p>
     </section>
 
     <div class="mb-6 flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
@@ -216,11 +208,6 @@
                   >ID {lot.id}</span
                 >
                 <span>登録 {formatLotDate(lot.created_at)}</span>
-                {#if isFifoPriorityLot(lot.id, summary)}
-                  <span class="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wider text-primary"
-                    >FIFO 優先</span
-                  >
-                {/if}
               </div>
               <div class="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div class="space-y-2">

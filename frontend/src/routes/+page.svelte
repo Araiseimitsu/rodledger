@@ -248,9 +248,6 @@
     return num?.toLocaleString('ja-JP', { maximumFractionDigits }) ?? '0';
   }
 
-  function isOldestAvailableLot(lotSummary) {
-    return dashboard?.oldest_available_lot_id === lotSummary?.lot_id;
-  }
 </script>
 
 {#if loading}
@@ -268,9 +265,6 @@
     <!-- Hero Header -->
     <section class="mb-16">
       <h2 class="font-headline text-5xl md:text-6xl text-on-surface mb-4">The Lucid Archive</h2>
-      <p class="font-body text-on-surface-variant text-lg max-w-2xl leading-relaxed">
-        {dashboard.material.name} 在庫管理ダッシュボード
-      </p>
     </section>
 
     {#if saveError}
@@ -364,7 +358,6 @@
                 >
                   キャンセル
                 </button>
-                <p class="text-sm text-on-surface-variant">保存後、単重は自動で再計算されます。</p>
               </div>
             </div>
           {/if}
@@ -384,7 +377,7 @@
       </div>
 
       <!-- Weight -->
-      <div class="md:col-span-4 bg-surface-container-lowest border border-outline-variant/15 rounded-xl p-8 hover:bg-surface-container-low transition-colors duration-500">
+      <div class="md:col-span-6 bg-surface-container-lowest border border-outline-variant/15 rounded-xl p-8 hover:bg-surface-container-low transition-colors duration-500">
         <div class="w-10 h-10 rounded-full bg-primary-container flex items-center justify-center mb-6">
           <span class="material-symbols-outlined text-on-primary-container">weight</span>
         </div>
@@ -396,7 +389,7 @@
       </div>
 
       <!-- Quantity -->
-      <div class="md:col-span-4 bg-surface-container-lowest border border-outline-variant/15 rounded-xl p-8 hover:bg-surface-container-low transition-colors duration-500">
+      <div class="md:col-span-6 bg-surface-container-lowest border border-outline-variant/15 rounded-xl p-8 hover:bg-surface-container-low transition-colors duration-500">
         <div class="w-10 h-10 rounded-full bg-secondary-container flex items-center justify-center mb-6">
           <span class="material-symbols-outlined text-on-secondary-container">reorder</span>
         </div>
@@ -407,35 +400,12 @@
         </div>
       </div>
 
-      <!-- FIFO Lot Guide -->
-      <div class="md:col-span-4 bg-white/60 backdrop-blur-xl border border-outline-variant/15 rounded-xl overflow-hidden">
-        <div class="bg-primary/5 px-6 py-6">
-          <div class="flex min-h-[12rem] flex-col rounded-2xl border border-primary/15 bg-surface/60 p-5">
-            <div>
-              <h4 class="font-label font-bold text-xs uppercase tracking-widest text-primary">FIFO 優先ロット</h4>
-              <p class="mt-2 text-sm text-on-surface-variant">出庫は在庫が残っている最古ロットから順に処理します。</p>
-            </div>
-            <p class="mt-5 break-all font-headline text-xl leading-tight text-on-surface md:text-2xl">
-              {#if dashboard.lot_summaries.length > 0 && dashboard.oldest_available_lot_id}
-                {dashboard.lot_summaries.find((lot) => lot.lot_id === dashboard.oldest_available_lot_id)?.lot_code}
-              {:else}
-                在庫なし
-              {/if}
-            </p>
-          </div>
-        </div>
-        <div class="p-6">
-          <h4 class="font-label font-bold text-xs uppercase tracking-widest mb-2">ロット切替対応</h4>
-          <p class="text-sm text-on-surface-variant">古いロットの戻しがあっても、残在庫があれば再び優先対象として扱います。</p>
-        </div>
-      </div>
     </div>
 
     <section class="mt-12 rounded-3xl border border-outline-variant/15 bg-surface-container-lowest p-8 md:p-10">
       <div class="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h3 class="font-headline text-2xl text-on-surface">ロット別在庫</h3>
-          <p class="mt-2 text-sm text-on-surface-variant">総数を維持したまま、各ロットの残本数と残重量を確認できます。</p>
           <a href="/lots" class="mt-3 inline-flex items-center gap-1.5 text-sm font-semibold text-primary hover:underline">
             <span class="material-symbols-outlined text-base">edit_square</span>
             ロットコード・単価の修正
@@ -469,15 +439,10 @@
       {:else}
       <div class="space-y-3">
         {#each lotSummariesPage as lotSummary (lotSummary.lot_id)}
-          <div class="flex flex-col gap-4 rounded-2xl border px-5 py-4 md:flex-row md:items-center md:justify-between {isOldestAvailableLot(lotSummary)
-            ? 'border-primary/35 bg-primary/5'
-            : 'border-outline-variant/15 bg-surface'}">
+          <div class="flex flex-col gap-4 rounded-2xl border border-outline-variant/15 bg-surface px-5 py-4 md:flex-row md:items-center md:justify-between">
             <div>
               <div class="flex flex-wrap items-center gap-3">
                 <p class="font-body text-lg font-semibold text-on-surface">{lotSummary.lot_code}</p>
-                {#if isOldestAvailableLot(lotSummary)}
-                  <span class="rounded-full bg-primary px-3 py-1 text-[10px] font-bold uppercase tracking-[0.2em] text-on-primary">FIFO 優先</span>
-                {/if}
               </div>
               <p class="mt-1 text-sm text-on-surface-variant">登録日 {formatDate(lotSummary.created_at)} / 単価 ¥{formatSpecNumber(lotSummary.unit_price, 1)}kg</p>
             </div>

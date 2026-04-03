@@ -9,6 +9,7 @@
     fetchLotLocationStocks,
   } from '$lib/api';
   import { filterRowsWithStock } from '$lib/lotLocationStock.js';
+  import { firstLotIdString, sortLotsOldestFirst } from '$lib/lotSort.js';
   import { formatShelfLabel } from '$lib/shelfDisplay.js';
   import { parseIntegerQuantityInput, preventQuantityNonIntegerKeys } from '$lib/quantityInput.js';
   import {
@@ -42,15 +43,9 @@
   const lotSummaries = $derived(dashboard?.lot_summaries ?? []);
   const availableLotSummaries = $derived(lotSummaries.filter((lot) => lot.current_quantity > 0));
   const selectableLots = $derived(
-    lots
-      .filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id))
-      .slice()
-      .sort((left, right) => {
-        const leftTime = new Date(left.created_at).getTime();
-        const rightTime = new Date(right.created_at).getTime();
-        if (leftTime !== rightTime) return leftTime - rightTime;
-        return left.id - right.id;
-      }),
+    sortLotsOldestFirst(
+      lots.filter((lot) => availableLotSummaries.some((summary) => summary.lot_id === lot.id)),
+    ),
   );
 
   const locationsWithStock = $derived(filterRowsWithStock(lotLocationStocks));
@@ -96,9 +91,7 @@
   }
 
   function syncDefaultLot() {
-    const preferredLotId = dashboard?.oldest_available_lot_id;
-    const preferredLot = selectableLots.find((lot) => lot.id === preferredLotId) ?? selectableLots[0];
-    selectedLotId = preferredLot ? String(preferredLot.id) : '';
+    selectedLotId = firstLotIdString(selectableLots);
   }
 
   function syncLocationPair() {
@@ -284,11 +277,10 @@
   <main class="pt-32 pb-24 px-8 md:px-16 lg:px-32 max-w-5xl mx-auto w-full">
     <section class="mb-12">
       <h2 class="font-headline text-4xl lg:text-5xl font-bold tracking-tight text-on-surface mb-2">場所移動</h2>
-      <p class="font-body text-on-surface-variant text-lg">同一ロットのまま、保管場所間で在庫を移動します（総在庫は変わりません）。</p>
     </section>
 
     <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
-      <div class="lg:col-span-8 bg-surface-container-lowest rounded-xl p-8 shadow-sm">
+      <div class="lg:col-span-12 bg-surface-container-lowest rounded-xl p-8 shadow-sm">
         <form onsubmit={handleSubmit} class="space-y-10">
           <div class="space-y-3">
             <label for="lot-select" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
@@ -373,10 +365,7 @@
 
           <div class="space-y-6 border-y border-outline-variant/15 py-8">
             <div class="flex flex-col gap-3 rounded-2xl bg-surface-container-low p-3 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
-                <p class="mt-1 text-sm text-on-surface-variant">本数または重量で移動量を指定します。</p>
-              </div>
+              <p class="text-xs font-semibold uppercase tracking-[0.2em] text-on-surface-variant">入力方法</p>
               <div class="inline-flex rounded-full bg-surface-container p-1">
                 <button
                   type="button"
@@ -426,8 +415,6 @@
                         10本
                       </button>
                     </div>
-                  {:else}
-                    <span class="text-xs text-outline-variant">重量から換算した本数を登録します</span>
                   {/if}
                 </div>
                 {#if entryMode === 'quantity'}
@@ -468,12 +455,9 @@
               </div>
 
               <div class="space-y-3 min-w-0">
-                <div class="flex items-center justify-between gap-4">
-                  <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
-                    >重量（kg）</label
-                  >
-                  <span class="text-xs text-outline-variant">{entryMode === 'quantity' ? '本数から自動計算' : '直接入力'}</span>
-                </div>
+                <label for="weight-input" class="block font-label text-sm font-semibold tracking-wider text-on-surface-variant uppercase"
+                  >重量（kg）</label
+                >
                 <div class="space-y-2 w-full min-w-0">
                   <input
                     id="weight-input"
@@ -526,15 +510,6 @@
             </button>
           </div>
         </form>
-      </div>
-
-      <div class="lg:col-span-4 flex flex-col gap-6">
-        <div class="bg-surface-container-high rounded-xl p-6">
-          <h3 class="font-label text-xs font-bold tracking-widest text-on-surface-variant uppercase">ヒント</h3>
-          <p class="mt-3 text-sm text-on-surface-variant leading-relaxed">
-            移動元には、そのロットで残がある場所だけが表示されます。総量は変わらず、場所別の内訳だけが更新されます。
-          </p>
-        </div>
       </div>
     </div>
   </main>
