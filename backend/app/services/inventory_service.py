@@ -176,6 +176,16 @@ class InventoryService:
     @staticmethod
     async def get_lot_location_stocks(lot_id: int) -> list[LotLocationStock]:
         """ロットの場所別残（履歴から集計）"""
+        lot = await InventoryService.get_lot(lot_id)
+        if not lot:
+            return []
+        material = await InventoryService.get_material(lot.material_id)
+        weight_per_unit = 0.0
+        if material is not None:
+            wpu = float(material.weight_per_unit)
+            if math.isfinite(wpu):
+                weight_per_unit = wpu
+
         db = await get_db()
         try:
             cursor = await db.execute(
@@ -228,17 +238,24 @@ class InventoryService:
                 (lot_id,),
             )
             rows = await cursor.fetchall()
-            return [
-                LotLocationStock(
-                    location_id=row["location_id"],
-                    location_name=row["location_name"],
-                    current_quantity=int(row["current_quantity"] or 0),
-                    current_weight=InventoryService._normalize_zero(
-                        float(row["current_weight"] or 0.0), 3
-                    ),
+            items: list[LotLocationStock] = []
+            for row in rows:
+                raw_q = int(row["current_quantity"] or 0)
+                raw_w = float(row["current_weight"] or 0.0)
+                cq, cw = InventoryService._coupled_display_quantity_weight(
+                    raw_q, raw_w, weight_per_unit
                 )
-                for row in rows
-            ]
+                if cq == 0 and cw == 0:
+                    continue
+                items.append(
+                    LotLocationStock(
+                        location_id=row["location_id"],
+                        location_name=row["location_name"],
+                        current_quantity=cq,
+                        current_weight=cw,
+                    )
+                )
+            return items
         finally:
             await db.close()
 
@@ -321,6 +338,35 @@ class InventoryService:
         return max(0, int(math.floor(ratio + 0.5)))
 
     @staticmethod
+    def _coupled_display_quantity_weight(
+        quantity: int,
+        weight: float,
+        weight_per_unit: float,
+    ) -> tuple[int, float]:
+        """
+        本数と重量の積み上げ丸め誤差を表示用にまとめる。
+        - 丸め後の重量が 0 のときは本数も 0 にする（重量が尽きたのに本数だけ残る表示の矛盾を解消）。
+        - 本数が 0 のとき、単重換算で 0 本にならない重量だけ残っていれば両方 0
+          （本数出庫後に残る 0.008kg など）。
+        - 単重が無効なときは重量換算せず、上記の「重量 0 なら本数も 0」のみ適用する。
+        """
+        q = max(0, int(quantity))
+        w = InventoryService._normalize_zero(max(0.0, weight), 3)
+        if w <= 0:
+            return 0, 0.0
+
+        invalid_unit = weight_per_unit <= 0 or not math.isfinite(weight_per_unit)
+        if invalid_unit:
+            return (0, w) if q <= 0 else (q, w)
+
+        pieces_from_weight = InventoryService._quantity_from_weight_like_frontend(
+            w, weight_per_unit
+        )
+        if q <= 0:
+            return (0, 0.0) if pieces_from_weight <= 0 else (0, w)
+        return q, w
+
+    @staticmethod
     def _outbound_weight_within_stock(request_weight: float, stock_weight: float) -> bool:
         """出庫重量が在庫重量以内か（積み上げ丸めと換算の差を許容）"""
         rq = InventoryService._normalize_zero(max(0.0, request_weight), 3)
@@ -389,21 +435,25 @@ class InventoryService:
         summary: LotInventorySummary,
         weight_per_unit: float,
     ) -> LotInventorySummary:
-        """実効在庫ゼロのロットは表示・集計から除外する（本数・重量・金額を 0 に正規化）"""
-        if InventoryService._effective_stock_quantity(
+        """結合正規化のうえで実効在庫ゼロのロットは本数・重量・金額を 0 にそろえる。"""
+        q, w = InventoryService._coupled_display_quantity_weight(
             summary.current_quantity,
             summary.current_weight,
             weight_per_unit,
-        ) > 0:
-            return summary
+        )
+        if InventoryService._effective_stock_quantity(q, w, weight_per_unit) <= 0:
+            q, w = 0, 0.0
+            current_value = 0.0
+        else:
+            current_value = InventoryService._normalize_zero(w * summary.unit_price, 1)
         return LotInventorySummary(
             lot_id=summary.lot_id,
             lot_code=summary.lot_code,
             unit_price=summary.unit_price,
             created_at=summary.created_at,
-            current_quantity=0,
-            current_weight=0.0,
-            current_value=0.0,
+            current_quantity=q,
+            current_weight=w,
+            current_value=current_value,
         )
 
     @staticmethod

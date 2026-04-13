@@ -267,9 +267,10 @@
       };
     }
 
+    const calcQuantity = calculateQuantityFromWeight(weight);
     return {
-      quantity: calculateQuantityFromWeight(weight),
-      weight: normalizeWeight(weight),
+      quantity: calcQuantity,
+      weight: normalizeWeight(calcQuantity * (dashboard?.material?.weight_per_unit ?? 0)),
     };
   }
 

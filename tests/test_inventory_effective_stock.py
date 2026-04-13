@@ -1,6 +1,9 @@
 """本数・重量の実効在庫判定（丸め誤差）の単体テスト"""
+from datetime import datetime, timezone
+
 import pytest
 
+from app.models.models import LotInventorySummary
 from app.services.inventory_service import InventoryService
 
 
@@ -34,10 +37,27 @@ def test_outbound_weight_within_stock_rejects_clear_shortage():
     assert not InventoryService._outbound_weight_within_stock(90.502, 90.499)
 
 
-def test_total_effective_quantity_sums_lots():
-    from app.models.models import LotInventorySummary
-    from datetime import datetime, timezone
+@pytest.mark.parametrize(
+    ("quantity", "weight", "weight_per_unit", "expected_q", "expected_w"),
+    [
+        (0, 0.008, 0.5, 0, 0.0),
+        (0, 0.008, 2.5, 0, 0.0),
+        (3, 0.0, 0.5, 0, 0.0),
+        (0, 0.6, 0.5, 0, 0.6),
+        (2, 1.0, 0.5, 2, 1.0),
+    ],
+)
+def test_coupled_display_quantity_weight(
+    quantity, weight, weight_per_unit, expected_q, expected_w
+):
+    q, w = InventoryService._coupled_display_quantity_weight(
+        quantity, weight, weight_per_unit
+    )
+    assert q == expected_q
+    assert w == expected_w
 
+
+def test_total_effective_quantity_sums_lots():
     base = datetime(2025, 1, 1, tzinfo=timezone.utc)
     lots = [
         LotInventorySummary(
