@@ -1,13 +1,15 @@
 <script>
   import { onMount } from 'svelte';
   import {
-    fetchDashboard,
-    fetchLots,
+    createIdempotencyKey,
     createLot,
     createTransaction,
-    createIdempotencyKey,
+    fetchDashboard,
+    fetchLots,
+    fetchLotLocationStocks,
     fetchStockLocations,
   } from '$lib/api';
+  import { filterRowsWithStock } from '$lib/lotLocationStock.js';
   import {
     readLastStockLocationId,
     sameStringArray,
@@ -42,6 +44,8 @@
   let idempotencyKey = $state('');
   let stockLocations = $state([]);
   let selectedLocationIds = $state([]);
+  let lotLocationStocks = $state([]);
+  let lotLocationFetchId = 0;
 
   const selectedExistingLot = $derived(lots.find((lot) => lot.id === Number(selectedLotId)) ?? null);
   const parsedNewLotUnitPrice = $derived(Number(newLotUnitPrice || 0));
@@ -53,6 +57,8 @@
       return s != null && s.current_quantity > 0;
     });
   });
+
+  const locationsWithStock = $derived(filterRowsWithStock(lotLocationStocks));
 
   const weightReadonlyDisplay = $derived.by(() => {
     const w = normalizeWeight(weight);
@@ -111,8 +117,8 @@
     }
     if (mode === 'new') {
       selectedLocationIds = [];
+      lotLocationStocks = [];
     }
-    syncSelectedLocations();
   }
 
   function syncLotDefaults() {
@@ -132,6 +138,15 @@
     lotMode = 'new';
   }
 
+  function locationIdsFromLotStockRows(availableIds) {
+    const rows = locationsWithStock;
+    if (rows.length === 0) {
+      return null;
+    }
+    const ids = rows.map((r) => String(r.location_id)).filter((id) => availableIds.has(id));
+    return ids.length > 0 ? ids : null;
+  }
+
   function syncSelectedLocations() {
     if (stockLocations.length === 0) {
       selectedLocationIds = [];
@@ -139,23 +154,62 @@
     }
 
     const availableIds = new Set(stockLocations.map((loc) => String(loc.id)));
+
+    if (lotMode === 'existing') {
+      if (!selectedLotId) {
+        selectedLocationIds = [];
+        return;
+      }
+      const fromApi = locationIdsFromLotStockRows(availableIds);
+      if (fromApi != null) {
+        selectedLocationIds = fromApi;
+        return;
+      }
+      const preferred = readLastStockLocationId();
+      if (preferred != null && availableIds.has(String(preferred))) {
+        selectedLocationIds = [String(preferred)];
+        return;
+      }
+      selectedLocationIds = [String(stockLocations[0].id)];
+      return;
+    }
+
     const filtered = selectedLocationIds.filter((id) => availableIds.has(String(id)));
     if (filtered.length > 0) {
       selectedLocationIds = filtered;
       return;
     }
-    if (lotMode === 'new') {
-      if (!sameStringArray([], selectedLocationIds)) {
-        selectedLocationIds = [];
+    if (!sameStringArray([], selectedLocationIds)) {
+      selectedLocationIds = [];
+    }
+  }
+
+  async function refreshLotLocationStocks() {
+    const existingMode = lotMode === 'existing';
+    if (!existingMode || !selectedLotId) {
+      lotLocationStocks = [];
+      if (existingMode && !selectedLotId) {
+        syncSelectedLocations();
       }
       return;
     }
-    const preferred = readLastStockLocationId();
-    if (preferred != null && availableIds.has(String(preferred))) {
-      selectedLocationIds = [String(preferred)];
-      return;
+
+    const fetchId = ++lotLocationFetchId;
+    lotLocationStocks = [];
+    try {
+      const res = await fetchLotLocationStocks(Number(selectedLotId));
+      if (fetchId !== lotLocationFetchId) {
+        return;
+      }
+      lotLocationStocks = res.items ?? [];
+    } catch (e) {
+      if (fetchId !== lotLocationFetchId) {
+        return;
+      }
+      console.error(e);
+      lotLocationStocks = [];
     }
-    selectedLocationIds = [String(stockLocations[0].id)];
+    syncSelectedLocations();
   }
 
   function getSelectedLocationLabels() {
@@ -183,7 +237,6 @@
       lots = items;
       stockLocations = await fetchStockLocations();
       syncLotDefaults();
-      syncSelectedLocations();
     } catch (e) {
       error = e?.message || 'データの取得に失敗しました';
       console.error(e);
@@ -200,6 +253,12 @@
     if (entryMode === 'quantity' && dashboard?.material) {
       syncWeightFromQuantity(normalizeQuantity(quantity));
     }
+  });
+
+  $effect(() => {
+    lotMode;
+    selectedLotId;
+    void refreshLotLocationStocks();
   });
 
   function adjustQuantity(delta) {
