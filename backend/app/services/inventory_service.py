@@ -195,7 +195,7 @@ class InventoryService:
                     sl.name AS location_name,
                     COALESCE(SUM(
                         CASE
-                            WHEN t.type IN ('in', 'return', 'adjust')
+                            WHEN t.type IN ('in', 'return', 'adjust', 'reset')
                                 AND t.location_id = sl.id
                                 THEN t.quantity
                             WHEN t.type = 'out' AND t.location_id = sl.id
@@ -209,7 +209,7 @@ class InventoryService:
                     ), 0) AS current_quantity,
                     COALESCE(SUM(
                         CASE
-                            WHEN t.type IN ('in', 'return', 'adjust')
+                            WHEN t.type IN ('in', 'return', 'adjust', 'reset')
                                 AND t.location_id = sl.id
                                 THEN t.weight
                             WHEN t.type = 'out' AND t.location_id = sl.id
@@ -225,7 +225,7 @@ class InventoryService:
                 LEFT JOIN transactions t
                     ON t.lot_id = ?
                     AND (
-                        (t.type IN ('in', 'return', 'adjust', 'out') AND t.location_id = sl.id)
+                        (t.type IN ('in', 'return', 'adjust', 'reset', 'out') AND t.location_id = sl.id)
                         OR (
                             t.type = 'transfer'
                             AND (t.location_from_id = sl.id OR t.location_to_id = sl.id)
@@ -271,7 +271,7 @@ class InventoryService:
             SELECT
                 COALESCE(SUM(
                     CASE
-                        WHEN type IN ('in', 'return', 'adjust') AND transactions.location_id = ?
+                        WHEN type IN ('in', 'return', 'adjust', 'reset') AND transactions.location_id = ?
                             THEN quantity
                         WHEN type = 'out' AND transactions.location_id = ?
                             THEN -quantity
@@ -284,7 +284,7 @@ class InventoryService:
                 ), 0) AS q,
                 COALESCE(SUM(
                     CASE
-                        WHEN type IN ('in', 'return', 'adjust') AND transactions.location_id = ?
+                        WHEN type IN ('in', 'return', 'adjust', 'reset') AND transactions.location_id = ?
                             THEN weight
                         WHEN type = 'out' AND transactions.location_id = ?
                             THEN -weight
@@ -403,6 +403,88 @@ class InventoryService:
         return int(cursor.lastrowid)
 
     @staticmethod
+    async def _create_reset_transaction(
+        db,
+        data: TransactionCreate,
+    ) -> Transaction:
+        """ロット（またはロット×場所）の在庫を0にリセットするRESETトランザクションを作成"""
+        lot = await InventoryService.get_lot(data.lot_id)
+        if not lot or lot.material_id != data.material_id:
+            raise InsufficientInventoryError("リセット対象のロットが見つかりません")
+
+        material = await InventoryService.get_material(data.material_id)
+        if not material:
+            raise InsufficientInventoryError("材料が見つかりません")
+
+        # location_id が指定されている場合は、その場所のみの在庫をリセット
+        if data.location_id is not None:
+            loc_qty, loc_weight = await InventoryService._get_lot_location_balance(
+                db, data.lot_id, data.location_id
+            )
+            cq, cw = InventoryService._coupled_display_quantity_weight(
+                loc_qty, loc_weight, material.weight_per_unit
+            )
+            if cq == 0 and cw == 0:
+                loc = await InventoryService.get_stock_location(data.location_id)
+                loc_name = loc.name if loc else str(data.location_id)
+                raise InsufficientInventoryError(f"場所 {loc_name} の在庫は既に0です")
+            reset_quantity = -cq
+            reset_weight = -cw
+        else:
+            # ロット全体の現在在庫を計算
+            lot_summaries_raw = await InventoryService._get_lot_inventory_summaries(db, data.material_id)
+            target_lot_summary = None
+            for summary in lot_summaries_raw:
+                if summary.lot_id == data.lot_id:
+                    target_lot_summary = summary
+                    break
+
+            if target_lot_summary is None:
+                raise InsufficientInventoryError("リセット対象のロットの在庫が見つかりません")
+
+            # 在庫が既に0の場合はリセット不要
+            if target_lot_summary.current_quantity == 0 and target_lot_summary.current_weight == 0:
+                raise InsufficientInventoryError("ロットの在庫は既に0です")
+
+            # リセット用のトランザクションを作成（在庫を0にする）
+            reset_quantity = -target_lot_summary.current_quantity
+            reset_weight = -target_lot_summary.current_weight
+
+        try:
+            cursor = await db.execute(
+                """
+                INSERT INTO transactions
+                (material_id, lot_id, type, quantity, weight, unit_price, memo,
+                 location_note, idempotency_key, location_id, location_from_id, location_to_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL)
+                """,
+                (
+                    data.material_id,
+                    data.lot_id,
+                    TransactionType.RESET.value,
+                    reset_quantity,
+                    reset_weight,
+                    lot.unit_price,
+                    data.memo,
+                    data.location_note,
+                    data.idempotency_key,
+                    data.location_id,
+                ),
+            )
+            await db.commit()
+            tx_id = cursor.lastrowid
+        except sqlite3.IntegrityError:
+            if data.idempotency_key:
+                existing = await InventoryService.get_transaction_by_idempotency_key(
+                    data.idempotency_key
+                )
+                if existing:
+                    return existing
+            raise
+
+        return await InventoryService.get_transaction(tx_id)
+
+    @staticmethod
     def _effective_stock_quantity(
         quantity: int,
         weight: float,
@@ -474,6 +556,7 @@ class InventoryService:
                         WHEN transactions.type IN ('in', 'return') THEN transactions.quantity
                         WHEN transactions.type = 'out' THEN -transactions.quantity
                         WHEN transactions.type = 'adjust' THEN transactions.quantity
+                        WHEN transactions.type = 'reset' THEN transactions.quantity
                         ELSE 0
                     END
                 ), 0) AS current_quantity,
@@ -482,6 +565,7 @@ class InventoryService:
                         WHEN transactions.type IN ('in', 'return') THEN transactions.weight
                         WHEN transactions.type = 'out' THEN -transactions.weight
                         WHEN transactions.type = 'adjust' THEN transactions.weight
+                        WHEN transactions.type = 'reset' THEN transactions.weight
                         ELSE 0
                     END
                 ), 0) AS current_weight
@@ -833,6 +917,9 @@ class InventoryService:
                 )
                 if existing:
                     return existing
+
+            if data.type == TransactionType.RESET:
+                return await InventoryService._create_reset_transaction(db, data)
 
             if data.type == TransactionType.TRANSFER:
                 lot = await InventoryService.get_lot(data.lot_id)

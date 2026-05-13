@@ -68,7 +68,7 @@ async def init_db():
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 material_id INTEGER NOT NULL,
                 lot_id INTEGER NOT NULL,
-                type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer')),
+                type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer', 'reset')),
                 quantity INTEGER NOT NULL,
                 weight REAL NOT NULL,
                 unit_price REAL NOT NULL,
@@ -91,6 +91,7 @@ async def init_db():
         await _ensure_transaction_location_note(db)
         await _ensure_all_shelf_numbers_seeded(db)
         await _migrate_legacy_transactions_table(db)
+        await _migrate_transaction_type_check_constraint(db)
         await _migrate_stock_locations_legacy_names(db)
         await _migrate_lots_unique_per_material(db)
 
@@ -339,6 +340,58 @@ async def _get_default_stock_location_id(db: aiosqlite.Connection) -> int:
     return int(row["id"])
 
 
+async def _migrate_transaction_type_check_constraint(db: aiosqlite.Connection):
+    """
+    transactions テーブルの type カラムの CHECK 制約を更新して 'reset' を許可する。
+    既存の CHECK 制約に 'reset' が含まれていない場合に実行される。
+    """
+    cursor = await db.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='transactions'"
+    )
+    row = await cursor.fetchone()
+    if not row:
+        return
+
+    create_sql = row["sql"]
+    if "'reset'" in create_sql:
+        return
+
+    # CHECK 制約に 'reset' が含まれていない場合、テーブルを再作成
+    new_create_sql = create_sql.replace(
+        "CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer'))",
+        "CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer', 'reset'))"
+    )
+
+    # クォートあり/なし両方に対応してテーブル名を置換
+    if 'CREATE TABLE "transactions"' in new_create_sql:
+        ddl = new_create_sql.replace('CREATE TABLE "transactions"', 'CREATE TABLE "transactions_new"', 1)
+    else:
+        ddl = new_create_sql.replace("CREATE TABLE transactions", "CREATE TABLE transactions_new", 1)
+
+    # カラム一覧を取得
+    cursor = await db.execute("PRAGMA table_info(transactions)")
+    columns = [col["name"] for col in await cursor.fetchall()]
+
+    await db.execute("DROP TABLE IF EXISTS transactions_new")
+    await db.execute(ddl)
+    await db.execute(
+        f"INSERT INTO transactions_new SELECT {', '.join(columns)} FROM transactions"
+    )
+    await db.execute("DROP TABLE transactions")
+    await db.execute("ALTER TABLE transactions_new RENAME TO transactions")
+
+    # インデックスを再作成
+    await db.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_transactions_idempotency_key ON transactions(idempotency_key)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transactions_lot_id ON transactions(lot_id)"
+    )
+    await db.execute(
+        "CREATE INDEX IF NOT EXISTS idx_transactions_material_id ON transactions(material_id)"
+    )
+
+
 async def _migrate_legacy_transactions_table(db: aiosqlite.Connection):
     """
     旧スキーマの transactions（location 列なし）を新スキーマへ移行する。
@@ -364,7 +417,7 @@ async def _migrate_legacy_transactions_table(db: aiosqlite.Connection):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             material_id INTEGER NOT NULL,
             lot_id INTEGER NOT NULL,
-            type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer')),
+            type TEXT NOT NULL CHECK(type IN ('in', 'out', 'return', 'adjust', 'transfer', 'reset')),
             quantity INTEGER NOT NULL,
             weight REAL NOT NULL,
             unit_price REAL NOT NULL,

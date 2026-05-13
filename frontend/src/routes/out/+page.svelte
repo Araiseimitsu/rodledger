@@ -64,6 +64,10 @@
 
   const locationsWithStock = $derived(filterRowsWithStock(lotLocationStocks));
 
+  const resettableLocations = $derived(
+    locationsWithStock.filter((row) => selectedLocationIds.includes(String(row.location_id)))
+  );
+
   const weightReadonlyDisplay = $derived.by(() => {
     const w = normalizeWeight(weight);
     if (w === 0) return '0';
@@ -338,6 +342,59 @@
     } catch (e) {
       console.error(e);
       alert(e?.message || '登録に失敗しました');
+    } finally {
+      submitting = false;
+    }
+  }
+
+  // 在庫リセット（選択した置き場ごと）
+  async function handleReset() {
+    if (!selectedLotId || !selectedLotSummary || submitting) return;
+
+    const selectedLocations = locationsWithStock.filter((row) =>
+      selectedLocationIds.includes(String(row.location_id))
+    );
+
+    if (selectedLocations.length === 0) {
+      alert('リセット対象の置き場が選択されていません。');
+      return;
+    }
+
+    const locationLabels = selectedLocations.map(
+      (row) =>
+        `${String(row.location_name).trim()} (${row.current_quantity}本 / ${row.current_weight.toFixed(3)}kg)`
+    );
+
+    const confirmed = confirm(
+      `ロット「${selectedLotSummary.lot_code}」の以下の場所の在庫を0にリセットしますか？\n\n` +
+      locationLabels.join('\n') +
+      `\n\nこの操作は取り消せません。`
+    );
+    if (!confirmed) return;
+
+    submitting = true;
+    try {
+      const selectedLot = lots.find((l) => l.id === Number(selectedLotId));
+
+      for (const loc of selectedLocations) {
+        const resetKey = createIdempotencyKey();
+        await createTransaction({
+          material_id: dashboard.material.id,
+          lot_id: Number(selectedLotId),
+          type: 'reset',
+          quantity: 0,
+          weight: 0,
+          unit_price: selectedLot?.unit_price,
+          memo: '在庫リセット',
+          idempotency_key: resetKey,
+          location_id: loc.location_id,
+        });
+      }
+
+      await loadData();
+    } catch (e) {
+      console.error(e);
+      alert(e?.message || 'リセットに失敗しました');
     } finally {
       submitting = false;
     }
@@ -722,6 +779,21 @@
             </div>
           {:else}
             <p class="mt-4 text-sm text-on-surface-variant">{mode === 'out' ? '出庫可能なロット在庫がありません。' : '戻し先ロットを選択してください。'}</p>
+          {/if}
+
+          {#if selectedLotSummary && resettableLocations.length > 0}
+            <div class="mt-4 pt-4 border-t border-outline-variant/15">
+              <button
+                type="button"
+                onclick={handleReset}
+                disabled={submitting}
+                class="w-full px-4 py-3 rounded-lg bg-surface-container-high text-on-surface-variant text-sm font-semibold hover:bg-surface-container-highest transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                <span class="material-symbols-outlined text-base">restart_alt</span>
+                選択場所の在庫を0にリセット
+              </button>
+              <p class="mt-2 text-[10px] text-on-surface-variant text-center">個体差による誤差を調整します</p>
+            </div>
           {/if}
         </div>
 

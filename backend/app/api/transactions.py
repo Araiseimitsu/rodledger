@@ -186,7 +186,7 @@ async def list_transactions(
 
 @router.post("/transactions", response_model=Transaction, status_code=201)
 async def create_transaction(data: TransactionCreate):
-    """トランザクション作成（入庫/出庫/戻し/修正）"""
+    """トランザクション作成（入庫/出庫/戻し/修正/リセット）"""
     material = await InventoryService.get_material(data.material_id)
     if not material:
         raise HTTPException(status_code=404, detail="Material not found")

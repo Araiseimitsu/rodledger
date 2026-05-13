@@ -15,6 +15,7 @@ class TransactionType(str, Enum):
     RETURN = "return"
     ADJUST = "adjust"
     TRANSFER = "transfer"
+    RESET = "reset"
 
 
 # ============ Material ============
@@ -157,14 +158,18 @@ class TransactionBase(BaseModel):
     material_id: int
     lot_id: int
     type: TransactionType
-    quantity: int = Field(ge=0, description="本数")
-    weight: float = Field(ge=0, description="kg")
+    quantity: int = Field(description="本数")
+    weight: float = Field(description="kg")
     memo: Optional[str] = None
     location_note: Optional[str] = None
     idempotency_key: Optional[str] = None
 
     @model_validator(mode="after")
     def validate_amounts(self):
+        if self.type == TransactionType.RESET:
+            return self
+        if self.quantity < 0 or self.weight < 0:
+            raise ValueError("数量・重量は負の値にできません")
         if self.quantity == 0 and self.weight == 0:
             raise ValueError("数量または重量のどちらかを入力してください")
         return self
@@ -193,13 +198,15 @@ class TransactionCreate(TransactionBase):
             if self.location_from_id == self.location_to_id:
                 raise ValueError("移動元と移動先は異なる場所を指定してください")
             return self
+        if self.type == TransactionType.RESET:
+            return self
         if self.location_from_id is not None or self.location_to_id is not None:
             raise ValueError("移動以外では location_from_id / location_to_id は指定できません")
         return self
 
 class TransactionUpdate(BaseModel):
-    quantity: Optional[int] = Field(default=None, ge=0)
-    weight: Optional[float] = Field(default=None, ge=0)
+    quantity: Optional[int] = Field(default=None)
+    weight: Optional[float] = Field(default=None)
     memo: Optional[str] = None
 
 

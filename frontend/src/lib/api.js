@@ -226,7 +226,7 @@ async function requestJson(path, options = {}) {
  * @typedef {Object} TransactionCreateInput
  * @property {number} material_id
  * @property {number} lot_id
- * @property {'in'|'out'|'return'|'adjust'|'transfer'} type
+ * @property {'in'|'out'|'return'|'adjust'|'transfer'|'reset'} type
  * @property {number} quantity
  * @property {number} weight
  * @property {number} [unit_price]
